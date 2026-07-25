@@ -96,9 +96,9 @@ model Meter {
   installationLocation  String
   hasCurrentTransformer Boolean
 
-  currentTransformerPrimary   Int?
-  currentTransformerSecondary Int?
-  transformationCoefficient   Int
+  primaryCurrent   Int?
+  secondaryCurrent Int?
+  transformerRatio Decimal? @db.Decimal(10, 4)
 
   readings MeterReading[]
   charges  Charge[]

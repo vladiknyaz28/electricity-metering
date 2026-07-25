@@ -14,6 +14,7 @@ import {
 import type { EnergyObject } from '../types/object'
 import type { Consumer } from '../types/consumer'
 import ConsumerFormDialog from '../components/ConsumerFormDialog.vue'
+import EntityCard from '../components/EntityCard.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -175,6 +176,12 @@ async function onHardDelete(consumer: Consumer) {
   }
 }
 
+function statusLabel(status: string) {
+  if (status === 'active') return 'Активен'
+  if (status === 'inactive') return 'Неактивен'
+  return status
+}
+
 function goToMeters(consumerId: string) {
   router.push({ path: '/meters', query: { consumerId } })
 }
@@ -305,21 +312,15 @@ onMounted(async () => {
 
     <template v-else-if="!loading">
       <div class="grid">
-        <el-card
+        <EntityCard
           v-for="item in pagedConsumers"
           :id="`consumer-card-${item.id}`"
           :key="item.id"
-          shadow="hover"
-          class="card"
-          :class="{ highlighted: highlightedId === item.id }"
+          :title="item.name"
+          :status-label="statusLabel(item.status)"
+          :status-type="item.status === 'active' ? 'success' : 'info'"
+          :highlighted="highlightedId === item.id"
         >
-          <div class="card-top">
-            <strong>{{ item.name }}</strong>
-            <el-tag :type="item.status === 'active' ? 'success' : 'info'" size="small">
-              {{ item.status === 'active' ? 'Активен' : 'Неактивен' }}
-            </el-tag>
-          </div>
-
           <div class="meta">{{ typeLabels[item.type] || item.type }}</div>
           <div class="line">
             Объект:
@@ -327,7 +328,9 @@ onMounted(async () => {
               → {{ item.object?.name || '—' }}
             </el-link>
           </div>
-          <div v-if="item.contactPerson" class="line">Контакт: {{ item.contactPerson }}</div>
+          <div v-if="item.contactPerson" class="line">
+            Контакт: {{ item.contactPerson }}
+          </div>
           <div v-if="item.phone" class="line">Телефон: {{ item.phone }}</div>
           <div v-if="item.email" class="line">Email: {{ item.email }}</div>
           <div class="line">Тариф: {{ item.tariff?.name || 'Не назначен' }}</div>
@@ -339,8 +342,10 @@ onMounted(async () => {
             <span>Пользователи: {{ item._count?.users ?? 0 }}</span>
           </div>
 
-          <div v-if="isAdmin" class="actions">
-            <el-button size="small" @click="openEdit(item)">Редактировать</el-button>
+          <template v-if="isAdmin" #actions>
+            <el-button type="primary" plain @click="openEdit(item)">
+              Редактировать
+            </el-button>
             <el-popconfirm
               :title="`Удалить потребителя ${item.name}?`"
               confirm-button-text="Удалить"
@@ -348,7 +353,7 @@ onMounted(async () => {
               @confirm="onDelete(item)"
             >
               <template #reference>
-                <el-button size="small" type="danger">Удалить</el-button>
+                <el-button type="danger" plain>Удалить</el-button>
               </template>
             </el-popconfirm>
             <el-popconfirm
@@ -360,11 +365,11 @@ onMounted(async () => {
               @confirm="onHardDelete(item)"
             >
               <template #reference>
-                <el-button size="small" type="danger" plain>Удалить окончательно</el-button>
+                <el-button type="danger">Удалить окончательно</el-button>
               </template>
             </el-popconfirm>
-          </div>
-        </el-card>
+          </template>
+        </EntityCard>
       </div>
 
       <div class="pager">
@@ -425,41 +430,9 @@ onMounted(async () => {
 
 .grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
   gap: 1rem;
-}
-
-.card.highlighted {
-  outline: 2px solid var(--el-color-primary);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--el-color-primary) 25%, transparent);
-}
-
-.card-top {
-  display: flex;
-  justify-content: space-between;
-  gap: 0.5rem;
-  align-items: flex-start;
-  margin-bottom: 0.5rem;
-}
-
-.meta,
-.line {
-  color: #4b5563;
-  font-size: 0.9rem;
-  margin: 0.2rem 0;
-}
-
-.counts {
-  display: flex;
-  gap: 1rem;
-  margin: 0.75rem 0;
-  font-size: 0.9rem;
-}
-
-.actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.5rem;
+  align-items: stretch;
 }
 
 .pager {

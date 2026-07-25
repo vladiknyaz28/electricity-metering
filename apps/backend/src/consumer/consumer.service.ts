@@ -5,6 +5,7 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateConsumerDto } from './dto/create-consumer.dto';
 import { UpdateConsumerDto } from './dto/update-consumer.dto';
@@ -61,8 +62,9 @@ export class ConsumerService {
     });
   }
 
-  async findAll() {
+  async findAll(currentUser: CurrentUser) {
     return this.prisma.consumer.findMany({
+      where: this.scopeWhere(currentUser),
       include: consumerInclude,
       orderBy: { createdAt: 'desc' },
     });
@@ -71,7 +73,16 @@ export class ConsumerService {
   async findOneForUser(id: string, currentUser: CurrentUser) {
     const consumer = await this.prisma.consumer.findUnique({
       where: { id },
-      include: consumerInclude,
+      include: {
+        ...consumerInclude,
+        object: {
+          select: {
+            id: true,
+            name: true,
+            managerId: true,
+          },
+        },
+      },
     });
 
     if (!consumer) {
@@ -79,6 +90,13 @@ export class ConsumerService {
     }
 
     if (currentUser.role === 'consumer' && currentUser.consumerId !== id) {
+      throw new ForbiddenException('Доступ запрещён');
+    }
+
+    if (
+      currentUser.role === 'object_manager' &&
+      consumer.object.managerId !== currentUser.id
+    ) {
       throw new ForbiddenException('Доступ запрещён');
     }
 
@@ -142,6 +160,18 @@ export class ConsumerService {
       throw new NotFoundException('Потребитель не найден');
     }
     return consumer;
+  }
+
+  private scopeWhere(currentUser: CurrentUser): Prisma.ConsumerWhereInput {
+    if (currentUser.role === 'admin') {
+      return {};
+    }
+
+    if (currentUser.role === 'object_manager') {
+      return { object: { managerId: currentUser.id } };
+    }
+
+    return { id: '__none__' };
   }
 
   private async ensureObjectExists(objectId: string) {

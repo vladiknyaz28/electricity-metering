@@ -29,8 +29,11 @@ export class ConsumerController {
 
   @Get()
   @Roles('admin', 'object_manager')
-  findAll() {
-    return this.consumerService.findAll();
+  findAll(
+    @CurrentUser()
+    currentUser: { id: string; role: string; consumerId?: string | null },
+  ) {
+    return this.consumerService.findAll(currentUser);
   }
 
   @Get(':id')

@@ -70,13 +70,9 @@ export class CreateMeterDto {
 
   @IsOptional()
   @IsNumber()
-  currentTransformerPrimary?: number;
+  primaryCurrent?: number;
 
   @IsOptional()
   @IsNumber()
-  currentTransformerSecondary?: number;
-
-  @IsOptional()
-  @IsNumber()
-  transformationCoefficient?: number;
+  secondaryCurrent?: number;
 }

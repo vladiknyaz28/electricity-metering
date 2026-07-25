@@ -101,7 +101,12 @@ export class ChargesService {
       );
     }
 
-    const consumptionT1 = this.round2(endReading.valueT1 - startReading.valueT1);
+    const ratio = this.getTransformerRatio(meter.transformerRatio);
+
+    const consumptionT1 = this.applyTransformerRatio(
+      endReading.valueT1 - startReading.valueT1,
+      ratio,
+    );
     if (consumptionT1 < 0) {
       throw new BadRequestException('Отрицательный расход — проверьте показания');
     }
@@ -109,10 +114,12 @@ export class ChargesService {
     const consumptionT2 = this.calcZoneConsumption(
       startReading.valueT2,
       endReading.valueT2,
+      ratio,
     );
     const consumptionT3 = this.calcZoneConsumption(
       startReading.valueT3,
       endReading.valueT3,
+      ratio,
     );
 
     const rateT1 = this.getZoneRate(tariff.zones, 'T1', consumptionT1 != null);
@@ -223,16 +230,33 @@ export class ChargesService {
   private calcZoneConsumption(
     startValue: number | null,
     endValue: number | null,
+    ratio: number | null,
   ): number | null {
     if (startValue == null || endValue == null) {
       return null;
     }
 
-    const consumption = this.round2(endValue - startValue);
+    const consumption = this.applyTransformerRatio(endValue - startValue, ratio);
     if (consumption < 0) {
       throw new BadRequestException('Отрицательный расход — проверьте показания');
     }
     return consumption;
+  }
+
+  private getTransformerRatio(
+    value: Prisma.Decimal | number | null | undefined,
+  ): number | null {
+    if (value == null) {
+      return null;
+    }
+    const ratio = Number(value);
+    return Number.isFinite(ratio) && ratio !== 0 ? ratio : null;
+  }
+
+  private applyTransformerRatio(rawConsumption: number, ratio: number | null) {
+    const consumption =
+      ratio != null ? rawConsumption * ratio : rawConsumption;
+    return this.round2(consumption);
   }
 
   private getZoneRate(

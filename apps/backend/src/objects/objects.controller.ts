@@ -11,9 +11,16 @@ import {
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
+import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { ObjectsService } from './objects.service';
 import { CreateObjectDto } from './dto/create-object.dto';
 import { UpdateObjectDto } from './dto/update-object.dto';
+
+type AuthUser = {
+  id: string;
+  role: string;
+  consumerId?: string | null;
+};
 
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Controller('objects')
@@ -28,14 +35,17 @@ export class ObjectsController {
 
   @Get()
   @Roles('admin', 'object_manager')
-  findAll() {
-    return this.objectsService.findAll();
+  findAll(@CurrentUser() currentUser: AuthUser) {
+    return this.objectsService.findAll(currentUser);
   }
 
   @Get(':id')
   @Roles('admin', 'object_manager')
-  findOne(@Param('id') id: string) {
-    return this.objectsService.findOne(id);
+  findOne(
+    @Param('id') id: string,
+    @CurrentUser() currentUser: AuthUser,
+  ) {
+    return this.objectsService.findOne(id, currentUser);
   }
 
   @Patch(':id')

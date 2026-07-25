@@ -1,9 +1,11 @@
 import {
   BadRequestException,
   ConflictException,
+  ForbiddenException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateObjectDto } from './dto/create-object.dto';
 import { UpdateObjectDto } from './dto/update-object.dto';
@@ -23,6 +25,12 @@ const objectInclude = {
     },
   },
 } as const;
+
+type CurrentUser = {
+  id: string;
+  role: string;
+  consumerId?: string | null;
+};
 
 @Injectable()
 export class ObjectsService {
@@ -44,14 +52,15 @@ export class ObjectsService {
     });
   }
 
-  async findAll() {
+  async findAll(currentUser: CurrentUser) {
     return this.prisma.object.findMany({
+      where: this.scopeWhere(currentUser),
       include: objectInclude,
       orderBy: { createdAt: 'desc' },
     });
   }
 
-  async findOne(id: string) {
+  async findOne(id: string, currentUser: CurrentUser) {
     const object = await this.prisma.object.findUnique({
       where: { id },
       include: objectInclude,
@@ -61,11 +70,18 @@ export class ObjectsService {
       throw new NotFoundException('Объект не найден');
     }
 
+    if (
+      currentUser.role === 'object_manager' &&
+      object.managerId !== currentUser.id
+    ) {
+      throw new ForbiddenException('Нет доступа к этому объекту');
+    }
+
     return object;
   }
 
   async update(id: string, dto: UpdateObjectDto) {
-    await this.findOne(id);
+    await this.getOrThrow(id);
     await this.ensureValidManager(dto.managerId);
 
     return this.prisma.object.update({
@@ -76,7 +92,7 @@ export class ObjectsService {
   }
 
   async remove(id: string) {
-    await this.findOne(id);
+    await this.getOrThrow(id);
 
     return this.prisma.object.update({
       where: { id },
@@ -117,6 +133,26 @@ export class ObjectsService {
     await this.prisma.object.delete({ where: { id } });
 
     return { message: 'Объект удалён окончательно' };
+  }
+
+  private scopeWhere(currentUser: CurrentUser): Prisma.ObjectWhereInput {
+    if (currentUser.role === 'admin') {
+      return {};
+    }
+
+    if (currentUser.role === 'object_manager') {
+      return { managerId: currentUser.id };
+    }
+
+    return { id: '__none__' };
+  }
+
+  private async getOrThrow(id: string) {
+    const object = await this.prisma.object.findUnique({ where: { id } });
+    if (!object) {
+      throw new NotFoundException('Объект не найден');
+    }
+    return object;
   }
 
   private async ensureValidManager(managerId?: string) {

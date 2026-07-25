@@ -36,6 +36,13 @@ type CurrentUser = {
   consumerId?: string | null;
 };
 
+type TransformerFields = {
+  hasCurrentTransformer: boolean;
+  primaryCurrent: number | null;
+  secondaryCurrent: number | null;
+  transformerRatio: Prisma.Decimal | null;
+};
+
 @Injectable()
 export class MetersService {
   constructor(private readonly prisma: PrismaService) {}
@@ -44,6 +51,12 @@ export class MetersService {
     const object = await this.getObjectOrThrow(dto.objectId);
     this.assertObjectManagerAccess(currentUser, object.managerId);
     await this.ensureConsumerBelongsToObject(dto.consumerId, dto.objectId);
+
+    const transformer = this.resolveTransformerFields(
+      dto.hasCurrentTransformer ?? false,
+      dto.primaryCurrent,
+      dto.secondaryCurrent,
+    );
 
     try {
       return await this.prisma.meter.create({
@@ -64,10 +77,7 @@ export class MetersService {
             : null,
           isMain: dto.isMain ?? false,
           installationLocation: dto.installationLocation,
-          hasCurrentTransformer: dto.hasCurrentTransformer ?? false,
-          currentTransformerPrimary: dto.currentTransformerPrimary,
-          currentTransformerSecondary: dto.currentTransformerSecondary,
-          transformationCoefficient: dto.transformationCoefficient ?? 1,
+          ...transformer,
         },
         include: meterInclude,
       });
@@ -115,21 +125,54 @@ export class MetersService {
     const targetConsumerId =
       dto.consumerId !== undefined ? dto.consumerId : existing.consumerId;
     if (dto.consumerId !== undefined || dto.objectId) {
-      await this.ensureConsumerBelongsToObject(targetConsumerId ?? undefined, targetObjectId);
+      await this.ensureConsumerBelongsToObject(
+        targetConsumerId ?? undefined,
+        targetObjectId,
+      );
+    }
+
+    const {
+      hasCurrentTransformer,
+      primaryCurrent,
+      secondaryCurrent,
+      verificationDueDate,
+      ...rest
+    } = dto;
+
+    const data: Prisma.MeterUpdateInput = {
+      ...rest,
+      verificationDueDate:
+        verificationDueDate !== undefined
+          ? verificationDueDate
+            ? new Date(verificationDueDate)
+            : null
+          : undefined,
+    };
+
+    const shouldUpdateTransformer =
+      hasCurrentTransformer !== undefined ||
+      primaryCurrent !== undefined ||
+      secondaryCurrent !== undefined;
+
+    if (shouldUpdateTransformer) {
+      Object.assign(
+        data,
+        this.resolveTransformerFields(
+          hasCurrentTransformer ?? existing.hasCurrentTransformer,
+          primaryCurrent !== undefined
+            ? primaryCurrent
+            : (existing.primaryCurrent ?? undefined),
+          secondaryCurrent !== undefined
+            ? secondaryCurrent
+            : (existing.secondaryCurrent ?? undefined),
+        ),
+      );
     }
 
     try {
       return await this.prisma.meter.update({
         where: { id },
-        data: {
-          ...dto,
-          verificationDueDate:
-            dto.verificationDueDate !== undefined
-              ? dto.verificationDueDate
-                ? new Date(dto.verificationDueDate)
-                : null
-              : undefined,
-        },
+        data,
         include: meterInclude,
       });
     } catch (error) {
@@ -150,6 +193,42 @@ export class MetersService {
       data: { status: 'inactive' },
       include: meterInclude,
     });
+  }
+
+  private resolveTransformerFields(
+    hasCurrentTransformer: boolean,
+    primaryCurrent?: number | null,
+    secondaryCurrent?: number | null,
+  ): TransformerFields {
+    if (!hasCurrentTransformer) {
+      return {
+        hasCurrentTransformer: false,
+        primaryCurrent: null,
+        secondaryCurrent: null,
+        transformerRatio: null,
+      };
+    }
+
+    if (
+      primaryCurrent == null ||
+      secondaryCurrent == null ||
+      primaryCurrent <= 0 ||
+      secondaryCurrent <= 0
+    ) {
+      throw new BadRequestException(
+        'Для подключения через трансформаторы тока укажите primaryCurrent и secondaryCurrent (> 0)',
+      );
+    }
+
+    const ratio =
+      Math.round((primaryCurrent / secondaryCurrent) * 10000) / 10000;
+
+    return {
+      hasCurrentTransformer: true,
+      primaryCurrent,
+      secondaryCurrent,
+      transformerRatio: new Prisma.Decimal(ratio.toFixed(4)),
+    };
   }
 
   private scopeWhere(currentUser: CurrentUser): Prisma.MeterWhereInput {
@@ -241,7 +320,9 @@ export class MetersService {
     }
 
     if (consumer.objectId !== objectId) {
-      throw new BadRequestException('Потребитель не принадлежит указанному объекту');
+      throw new BadRequestException(
+        'Потребитель не принадлежит указанному объекту',
+      );
     }
   }
 
@@ -250,7 +331,9 @@ export class MetersService {
       error instanceof Prisma.PrismaClientKnownRequestError &&
       error.code === 'P2002'
     ) {
-      throw new ConflictException('Счётчик с таким серийным номером уже существует');
+      throw new ConflictException(
+        'Счётчик с таким серийным номером уже существует',
+      );
     }
     throw error;
   }

@@ -1,0 +1,402 @@
+<script setup lang="ts">
+import { computed, reactive, ref, watch } from 'vue'
+import type { FormInstance, FormRules } from 'element-plus'
+import { ElMessage } from 'element-plus'
+import axios from 'axios'
+import { getObjects } from '../api/objects'
+import { getConsumers } from '../api/consumers'
+import { createMeter, updateMeter } from '../api/meters'
+import type { EnergyObject } from '../types/object'
+import type { Consumer } from '../types/consumer'
+import type { CreateMeterPayload, Meter } from '../types/meter'
+
+const props = defineProps<{
+  modelValue: boolean
+  meter?: Meter | null
+}>()
+
+const emit = defineEmits<{
+  'update:modelValue': [value: boolean]
+  saved: [meter: Meter]
+}>()
+
+const formRef = ref<FormInstance>()
+const saving = ref(false)
+const objects = ref<EnergyObject[]>([])
+const consumers = ref<Consumer[]>([])
+
+const isEdit = computed(() => Boolean(props.meter?.id))
+
+const form = reactive<{
+  objectId: string
+  consumerId: string | null
+  ownerType: string
+  name: string
+  serialNumber: string
+  resourceTypeCode: string
+  meterCategoryCode: string
+  tariffType: string
+  unit: string
+  accuracyClass: string
+  installationLocation: string
+  status: string
+  isMain: boolean
+  hasCurrentTransformer: boolean
+  primaryCurrent: number | undefined
+  secondaryCurrent: number | undefined
+}>({
+  objectId: '',
+  consumerId: null,
+  ownerType: 'object',
+  name: '',
+  serialNumber: '',
+  resourceTypeCode: 'electricity',
+  meterCategoryCode: 'residential',
+  tariffType: 'single',
+  unit: 'kWh',
+  accuracyClass: '1.0',
+  installationLocation: '',
+  status: 'active',
+  isMain: false,
+  hasCurrentTransformer: false,
+  primaryCurrent: undefined,
+  secondaryCurrent: 5,
+})
+
+const objectConsumers = computed(() =>
+  consumers.value.filter((item) => item.objectId === form.objectId),
+)
+
+const liveTransformerRatio = computed(() => {
+  const primary = Number(form.primaryCurrent)
+  const secondary = Number(form.secondaryCurrent)
+  if (!primary || !secondary || primary <= 0 || secondary <= 0) {
+    return null
+  }
+  return (primary / secondary).toFixed(2)
+})
+
+const positiveCurrentRule = {
+  validator: (_rule: unknown, value: number | undefined, callback: (error?: Error) => void) => {
+    if (!form.hasCurrentTransformer) {
+      callback()
+      return
+    }
+    if (value == null || Number(value) <= 0) {
+      callback(new Error('Укажите значение больше 0'))
+      return
+    }
+    callback()
+  },
+  trigger: 'blur',
+}
+
+const rules = computed<FormRules>(() => ({
+  objectId: [{ required: true, message: 'Выберите объект', trigger: 'change' }],
+  name: [{ required: true, message: 'Укажите название', trigger: 'blur' }],
+  serialNumber: [
+    { required: true, message: 'Укажите серийный номер', trigger: 'blur' },
+  ],
+  ownerType: [{ required: true, message: 'Укажите владельца', trigger: 'change' }],
+  resourceTypeCode: [
+    { required: true, message: 'Укажите тип ресурса', trigger: 'change' },
+  ],
+  meterCategoryCode: [
+    { required: true, message: 'Укажите категорию', trigger: 'change' },
+  ],
+  tariffType: [{ required: true, message: 'Укажите тип тарифа', trigger: 'change' }],
+  unit: [{ required: true, message: 'Укажите единицу', trigger: 'blur' }],
+  accuracyClass: [
+    { required: true, message: 'Укажите класс точности', trigger: 'blur' },
+  ],
+  installationLocation: [
+    { required: true, message: 'Укажите место установки', trigger: 'blur' },
+  ],
+  primaryCurrent: form.hasCurrentTransformer
+    ? [{ required: true, message: 'Укажите первичный ток', trigger: 'blur' }, positiveCurrentRule]
+    : [],
+  secondaryCurrent: form.hasCurrentTransformer
+    ? [
+        { required: true, message: 'Укажите вторичный ток', trigger: 'blur' },
+        positiveCurrentRule,
+      ]
+    : [],
+}))
+
+const visible = computed({
+  get: () => props.modelValue,
+  set: (value: boolean) => emit('update:modelValue', value),
+})
+
+function resetForm() {
+  form.objectId = props.meter?.objectId ?? ''
+  form.consumerId = props.meter?.consumerId ?? null
+  form.ownerType = props.meter?.ownerType ?? 'object'
+  form.name = props.meter?.name ?? ''
+  form.serialNumber = props.meter?.serialNumber ?? ''
+  form.resourceTypeCode = props.meter?.resourceTypeCode ?? 'electricity'
+  form.meterCategoryCode = props.meter?.meterCategoryCode ?? 'residential'
+  form.tariffType = props.meter?.tariffType ?? 'single'
+  form.unit = props.meter?.unit ?? 'kWh'
+  form.accuracyClass = props.meter?.accuracyClass ?? '1.0'
+  form.installationLocation = props.meter?.installationLocation ?? ''
+  form.status = props.meter?.status ?? 'active'
+  form.isMain = props.meter?.isMain ?? false
+  form.hasCurrentTransformer = props.meter?.hasCurrentTransformer ?? false
+  form.primaryCurrent = props.meter?.primaryCurrent ?? undefined
+  form.secondaryCurrent = props.meter?.secondaryCurrent ?? 5
+}
+
+async function loadOptions() {
+  try {
+    const [objectsData, consumersData] = await Promise.all([
+      getObjects(),
+      getConsumers().catch(() => [] as Consumer[]),
+    ])
+    objects.value = objectsData
+    consumers.value = consumersData
+  } catch {
+    objects.value = []
+    consumers.value = []
+  }
+}
+
+function getErrorMessage(error: unknown): string {
+  if (axios.isAxiosError(error)) {
+    const message = error.response?.data?.message
+    if (Array.isArray(message)) return message.join(', ')
+    if (typeof message === 'string' && message) return message
+  }
+  return isEdit.value ? 'Не удалось сохранить счётчик' : 'Не удалось создать счётчик'
+}
+
+async function onSubmit() {
+  const valid = await formRef.value?.validate().catch(() => false)
+  if (!valid) return
+
+  saving.value = true
+  try {
+    const payload: CreateMeterPayload = {
+      objectId: form.objectId,
+      consumerId: form.consumerId || null,
+      ownerType: form.ownerType,
+      name: form.name.trim(),
+      serialNumber: form.serialNumber.trim(),
+      resourceTypeCode: form.resourceTypeCode,
+      meterCategoryCode: form.meterCategoryCode,
+      tariffType: form.tariffType,
+      unit: form.unit.trim(),
+      accuracyClass: form.accuracyClass.trim(),
+      installationLocation: form.installationLocation.trim(),
+      status: form.status,
+      isMain: form.isMain,
+      hasCurrentTransformer: form.hasCurrentTransformer,
+      primaryCurrent: form.hasCurrentTransformer
+        ? Number(form.primaryCurrent)
+        : null,
+      secondaryCurrent: form.hasCurrentTransformer
+        ? Number(form.secondaryCurrent)
+        : null,
+    }
+
+    const saved = isEdit.value
+      ? await updateMeter(props.meter!.id, payload)
+      : await createMeter(payload)
+
+    emit('saved', saved)
+    visible.value = false
+    ElMessage.success(isEdit.value ? 'Счётчик обновлён' : 'Счётчик создан')
+  } catch (error) {
+    ElMessage.error(getErrorMessage(error))
+  } finally {
+    saving.value = false
+  }
+}
+
+watch(
+  () => props.modelValue,
+  async (open) => {
+    if (!open) return
+    resetForm()
+    await loadOptions()
+  },
+)
+
+watch(
+  () => form.objectId,
+  () => {
+    if (
+      form.consumerId &&
+      !objectConsumers.value.some((item) => item.id === form.consumerId)
+    ) {
+      form.consumerId = null
+    }
+  },
+)
+
+watch(
+  () => form.hasCurrentTransformer,
+  (enabled) => {
+    if (!enabled) {
+      form.primaryCurrent = undefined
+      form.secondaryCurrent = 5
+      formRef.value?.clearValidate(['primaryCurrent', 'secondaryCurrent'])
+    } else if (form.secondaryCurrent == null) {
+      form.secondaryCurrent = 5
+    }
+  },
+)
+</script>
+
+<template>
+  <el-dialog
+    v-model="visible"
+    :title="isEdit ? 'Редактировать счётчик' : 'Добавить счётчик'"
+    width="640px"
+    destroy-on-close
+  >
+    <el-form ref="formRef" :model="form" :rules="rules" label-position="top">
+      <el-form-item label="Название" prop="name">
+        <el-input v-model="form.name" />
+      </el-form-item>
+      <el-form-item label="Серийный номер" prop="serialNumber">
+        <el-input v-model="form.serialNumber" />
+      </el-form-item>
+      <el-form-item label="Объект" prop="objectId">
+        <el-select v-model="form.objectId" filterable style="width: 100%">
+          <el-option
+            v-for="item in objects"
+            :key="item.id"
+            :label="item.name"
+            :value="item.id"
+          />
+        </el-select>
+      </el-form-item>
+      <el-form-item label="Потребитель">
+        <el-select
+          v-model="form.consumerId"
+          clearable
+          filterable
+          style="width: 100%"
+          :disabled="!form.objectId"
+        >
+          <el-option
+            v-for="item in objectConsumers"
+            :key="item.id"
+            :label="item.name"
+            :value="item.id"
+          />
+        </el-select>
+      </el-form-item>
+      <div class="row">
+        <el-form-item label="Владелец" prop="ownerType" class="half">
+          <el-select v-model="form.ownerType" style="width: 100%">
+            <el-option label="Объект" value="object" />
+            <el-option label="Потребитель" value="consumer" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="Тип тарифа" prop="tariffType" class="half">
+          <el-select v-model="form.tariffType" style="width: 100%">
+            <el-option label="Однотарифный" value="single" />
+            <el-option label="Двухтарифный" value="double" />
+            <el-option label="Трёхтарифный" value="triple" />
+          </el-select>
+        </el-form-item>
+      </div>
+      <div class="row">
+        <el-form-item label="Тип ресурса" prop="resourceTypeCode" class="half">
+          <el-input v-model="form.resourceTypeCode" />
+        </el-form-item>
+        <el-form-item label="Категория" prop="meterCategoryCode" class="half">
+          <el-input v-model="form.meterCategoryCode" />
+        </el-form-item>
+      </div>
+      <div class="row">
+        <el-form-item label="Единица" prop="unit" class="half">
+          <el-input v-model="form.unit" />
+        </el-form-item>
+        <el-form-item label="Класс точности" prop="accuracyClass" class="half">
+          <el-input v-model="form.accuracyClass" />
+        </el-form-item>
+      </div>
+      <el-form-item label="Место установки" prop="installationLocation">
+        <el-input v-model="form.installationLocation" />
+      </el-form-item>
+      <el-form-item label="Тип подключения">
+        <el-select v-model="form.hasCurrentTransformer" style="width: 100%">
+          <el-option label="Прямое включение" :value="false" />
+          <el-option label="Через трансформаторы тока" :value="true" />
+        </el-select>
+      </el-form-item>
+      <template v-if="form.hasCurrentTransformer">
+        <div class="row">
+          <el-form-item
+            label="Первичный ток (А)"
+            prop="primaryCurrent"
+            class="half"
+          >
+            <el-input-number
+              v-model="form.primaryCurrent"
+              :min="1"
+              controls-position="right"
+              style="width: 100%"
+            />
+          </el-form-item>
+          <el-form-item
+            label="Вторичный ток (А)"
+            prop="secondaryCurrent"
+            class="half"
+          >
+            <el-input-number
+              v-model="form.secondaryCurrent"
+              :min="1"
+              controls-position="right"
+              style="width: 100%"
+            />
+          </el-form-item>
+        </div>
+        <div class="ratio-hint">
+          Коэффициент трансформации:
+          {{ liveTransformerRatio ?? '—' }}
+        </div>
+      </template>
+      <div class="row">
+        <el-form-item label="Статус" class="half">
+          <el-select v-model="form.status" style="width: 100%">
+            <el-option label="Активен" value="active" />
+            <el-option label="Неактивен" value="inactive" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="Основной" class="half">
+          <el-switch v-model="form.isMain" />
+        </el-form-item>
+      </div>
+    </el-form>
+
+    <template #footer>
+      <el-button @click="visible = false">Отмена</el-button>
+      <el-button type="primary" :loading="saving" @click="onSubmit">
+        Сохранить
+      </el-button>
+    </template>
+  </el-dialog>
+</template>
+
+<style scoped>
+.row {
+  display: flex;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.half {
+  flex: 1;
+  min-width: 200px;
+}
+
+.ratio-hint {
+  margin: 0 0 1rem;
+  color: #4b5563;
+  font-size: 14px;
+}
+</style>
