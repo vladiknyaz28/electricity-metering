@@ -4,7 +4,7 @@ generator client {
 
 datasource db {
   provider = "postgresql"
-  url = env("DATABASE_URL")
+  url      = env("DATABASE_URL")
 }
 
 model User {
@@ -13,7 +13,7 @@ model User {
   fullName     String
   email        String  @unique
   passwordHash String
-  role         String  // 'admin' | 'object_manager' | 'consumer' | 'auditor'
+  role         String // 'admin' | 'object_manager' | 'consumer' | 'auditor'
   status       String  @default("active")
 
   consumerId String?
@@ -62,8 +62,12 @@ model Consumer {
   sharePercent  Float?
   status        String
 
-  meters Meter[]
-  users  User[]
+  tariffId String?
+  tariff   Tariff? @relation(fields: [tariffId], references: [id], onDelete: SetNull)
+
+  meters  Meter[]
+  users   User[]
+  charges Charge[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -97,6 +101,7 @@ model Meter {
   transformationCoefficient   Int
 
   readings MeterReading[]
+  charges  Charge[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -115,11 +120,17 @@ model MeterReading {
   previousValue Float?
   currentValue  Float?
 
+  valueT1 Float
+  valueT2 Float?
+  valueT3 Float?
+  readingDate DateTime
+  comment     String?
+
   rawDelta                  Float?
   transformedDelta          Float?
   transformationCoefficient Int
 
-  source String
+  source String @default("manual")
   status String
 
   submittedById String?
@@ -135,8 +146,78 @@ model MeterReading {
   anomalyType String
   anomalyNote String?
 
+  chargeStarts Charge[] @relation("ChargeStartReading")
+  chargeEnds   Charge[] @relation("ChargeEndReading")
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@unique([meterId, periodCode])
+}
+
+model Tariff {
+  id String @id @default(cuid())
+
+  name             String
+  resourceTypeCode String
+  status           String    @default("active")
+  validFrom        DateTime
+  validTo          DateTime?
+
+  zones     TariffZone[]
+  consumers Consumer[]
+  charges   Charge[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model TariffZone {
+  id String @id @default(cuid())
+
+  tariffId String
+  tariff   Tariff @relation(fields: [tariffId], references: [id], onDelete: Cascade)
+
+  zoneCode String // 'T1' | 'T2' | 'T3'
+  rate     Float
+
+  createdAt DateTime @default(now())
+
+  @@unique([tariffId, zoneCode])
+}
+
+model Charge {
+  id String @id @default(cuid())
+
+  consumerId String
+  consumer   Consumer @relation(fields: [consumerId], references: [id], onDelete: Cascade)
+
+  meterId String
+  meter   Meter  @relation(fields: [meterId], references: [id], onDelete: Cascade)
+
+  tariffId String
+  tariff   Tariff @relation(fields: [tariffId], references: [id])
+
+  periodStart DateTime
+  periodEnd   DateTime
+
+  startReadingId String
+  startReading   MeterReading @relation("ChargeStartReading", fields: [startReadingId], references: [id])
+
+  endReadingId String
+  endReading   MeterReading @relation("ChargeEndReading", fields: [endReadingId], references: [id])
+
+  consumptionT1 Float
+  consumptionT2 Float?
+  consumptionT3 Float?
+
+  amountT1 Float
+  amountT2 Float?
+  amountT3 Float?
+
+  totalAmount Float
+  status      String @default("draft")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 }
