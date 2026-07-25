@@ -1,0 +1,142 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url = env("DATABASE_URL")
+}
+
+model User {
+  id String @id @default(cuid())
+
+  fullName     String
+  email        String  @unique
+  passwordHash String
+  role         String  // 'admin' | 'object_manager' | 'consumer' | 'auditor'
+  status       String  @default("active")
+
+  consumerId String?
+  consumer   Consumer? @relation(fields: [consumerId], references: [id], onDelete: SetNull)
+
+  managedObjects    Object[]       @relation("ObjectManager")
+  submittedReadings MeterReading[] @relation("SubmittedBy")
+  verifiedReadings  MeterReading[] @relation("VerifiedBy")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Object {
+  id String @id @default(cuid())
+
+  name         String
+  address      String
+  typeCode     String
+  categoryCode String
+  status       String
+
+  managerId String?
+  manager   User?   @relation("ObjectManager", fields: [managerId], references: [id], onDelete: SetNull)
+
+  meters    Meter[]
+  consumers Consumer[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Consumer {
+  id String @id @default(cuid())
+
+  objectId String
+  object   Object @relation(fields: [objectId], references: [id], onDelete: Cascade)
+
+  name          String
+  type          String
+  taxId         String?
+  contactPerson String?
+  phone         String?
+  email         String?
+  area          Float?
+  sharePercent  Float?
+  status        String
+
+  meters Meter[]
+  users  User[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Meter {
+  id String @id @default(cuid())
+
+  objectId String
+  object   Object @relation(fields: [objectId], references: [id], onDelete: Cascade)
+
+  consumerId String?
+  consumer   Consumer? @relation(fields: [consumerId], references: [id], onDelete: SetNull)
+
+  ownerType             String
+  name                  String
+  serialNumber          String    @unique
+  resourceTypeCode      String
+  meterCategoryCode     String
+  tariffType            String
+  unit                  String
+  accuracyClass         String
+  status                String
+  verificationDueDate   DateTime?
+  isMain                Boolean
+  installationLocation  String
+  hasCurrentTransformer Boolean
+
+  currentTransformerPrimary   Int?
+  currentTransformerSecondary Int?
+  transformationCoefficient   Int
+
+  readings MeterReading[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model MeterReading {
+  id String @id @default(cuid())
+
+  meterId String
+  meter   Meter  @relation(fields: [meterId], references: [id], onDelete: Cascade)
+
+  periodCode      String
+  periodStartDate DateTime
+  periodEndDate   DateTime
+
+  previousValue Float?
+  currentValue  Float?
+
+  rawDelta                  Float?
+  transformedDelta          Float?
+  transformationCoefficient Int
+
+  source String
+  status String
+
+  submittedById String?
+  submittedBy   User?   @relation("SubmittedBy", fields: [submittedById], references: [id], onDelete: SetNull)
+
+  verifiedById  String?
+  verifiedBy    User?     @relation("VerifiedBy", fields: [verifiedById], references: [id], onDelete: SetNull)
+  verifiedAt    DateTime?
+  disputeReason String?
+
+  isClosedPeriod Boolean @default(true)
+
+  anomalyType String
+  anomalyNote String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([meterId, periodCode])
+}

@@ -1,0 +1,28 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: electricity-metering-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: electricity
+      POSTGRES_PASSWORD: electricity
+      POSTGRES_DB: electricity_metering
+    ports:
+      - "5433:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  pgadmin:
+    image: dpage/pgadmin4
+    container_name: electricity-metering-pgadmin
+    restart: unless-stopped
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@local.dev
+      PGADMIN_DEFAULT_PASSWORD: admin
+    ports:
+      - "5050:80"
+    depends_on:
+      - postgres
+
+volumes:
+  pgdata:
