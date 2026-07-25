@@ -1,4 +1,4 @@
-import { IsNotEmpty, IsNumber, IsOptional, IsString } from 'class-validator';
+import { IsNotEmpty, IsNumber, IsOptional, IsString, ValidateIf } from 'class-validator';
 
 export class CreateConsumerDto {
   @IsNotEmpty()
@@ -36,6 +36,11 @@ export class CreateConsumerDto {
   @IsOptional()
   @IsNumber()
   sharePercent?: number;
+
+  @IsOptional()
+  @ValidateIf((_, value) => value !== null)
+  @IsString()
+  tariffId?: string | null;
 
   @IsOptional()
   @IsString()

@@ -23,6 +23,11 @@ const meterInclude = {
       name: true,
     },
   },
+  _count: {
+    select: {
+      readings: true,
+    },
+  },
 } as const;
 
 type CurrentUser = {

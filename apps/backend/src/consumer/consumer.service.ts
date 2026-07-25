@@ -1,4 +1,6 @@
 import {
+  BadRequestException,
+  ConflictException,
   ForbiddenException,
   Injectable,
   NotFoundException,
@@ -7,11 +9,23 @@ import { PrismaService } from '../prisma/prisma.service';
 import { CreateConsumerDto } from './dto/create-consumer.dto';
 import { UpdateConsumerDto } from './dto/update-consumer.dto';
 
-const objectInclude = {
+const consumerInclude = {
   object: {
     select: {
       id: true,
       name: true,
+    },
+  },
+  tariff: {
+    select: {
+      id: true,
+      name: true,
+    },
+  },
+  _count: {
+    select: {
+      meters: true,
+      users: true,
     },
   },
 } as const;
@@ -40,15 +54,16 @@ export class ConsumerService {
         email: dto.email,
         area: dto.area,
         sharePercent: dto.sharePercent,
+        tariffId: dto.tariffId,
         status: dto.status ?? 'active',
       },
-      include: objectInclude,
+      include: consumerInclude,
     });
   }
 
   async findAll() {
     return this.prisma.consumer.findMany({
-      include: objectInclude,
+      include: consumerInclude,
       orderBy: { createdAt: 'desc' },
     });
   }
@@ -56,7 +71,7 @@ export class ConsumerService {
   async findOneForUser(id: string, currentUser: CurrentUser) {
     const consumer = await this.prisma.consumer.findUnique({
       where: { id },
-      include: objectInclude,
+      include: consumerInclude,
     });
 
     if (!consumer) {
@@ -80,7 +95,7 @@ export class ConsumerService {
     return this.prisma.consumer.update({
       where: { id },
       data: dto,
-      include: objectInclude,
+      include: consumerInclude,
     });
   }
 
@@ -90,8 +105,35 @@ export class ConsumerService {
     return this.prisma.consumer.update({
       where: { id },
       data: { status: 'inactive' },
-      include: objectInclude,
+      include: consumerInclude,
     });
+  }
+
+  async hardDelete(id: string) {
+    const consumer = await this.prisma.consumer.findUnique({
+      where: { id },
+      include: consumerInclude,
+    });
+
+    if (!consumer) {
+      throw new NotFoundException('Потребитель не найден');
+    }
+
+    if (consumer.status !== 'inactive') {
+      throw new BadRequestException(
+        'Сначала выполните мягкое удаление (архивирование)',
+      );
+    }
+
+    if (consumer._count.meters > 0 || consumer._count.users > 0) {
+      throw new ConflictException(
+        `Невозможно удалить окончательно: привязано ${consumer._count.meters} счётчиков и ${consumer._count.users} пользователей`,
+      );
+    }
+
+    await this.prisma.consumer.delete({ where: { id } });
+
+    return { message: 'Потребитель удалён окончательно' };
   }
 
   private async findExisting(id: string) {

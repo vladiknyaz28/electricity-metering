@@ -49,6 +49,12 @@ export class ConsumerController {
     return this.consumerService.update(id, dto);
   }
 
+  @Delete(':id/permanent')
+  @Roles('admin')
+  hardDelete(@Param('id') id: string) {
+    return this.consumerService.hardDelete(id);
+  }
+
   @Delete(':id')
   @Roles('admin')
   remove(@Param('id') id: string) {

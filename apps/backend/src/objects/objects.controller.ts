@@ -44,6 +44,12 @@ export class ObjectsController {
     return this.objectsService.update(id, dto);
   }
 
+  @Delete(':id/permanent')
+  @Roles('admin')
+  hardDelete(@Param('id') id: string) {
+    return this.objectsService.hardDelete(id);
+  }
+
   @Delete(':id')
   @Roles('admin')
   remove(@Param('id') id: string) {

@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
@@ -7,12 +8,18 @@ import { PrismaService } from '../prisma/prisma.service';
 import { CreateObjectDto } from './dto/create-object.dto';
 import { UpdateObjectDto } from './dto/update-object.dto';
 
-const managerInclude = {
+const objectInclude = {
   manager: {
     select: {
       id: true,
       fullName: true,
       email: true,
+    },
+  },
+  _count: {
+    select: {
+      meters: true,
+      consumers: true,
     },
   },
 } as const;
@@ -33,13 +40,13 @@ export class ObjectsService {
         status: dto.status ?? 'active',
         managerId: dto.managerId,
       },
-      include: managerInclude,
+      include: objectInclude,
     });
   }
 
   async findAll() {
     return this.prisma.object.findMany({
-      include: managerInclude,
+      include: objectInclude,
       orderBy: { createdAt: 'desc' },
     });
   }
@@ -47,7 +54,7 @@ export class ObjectsService {
   async findOne(id: string) {
     const object = await this.prisma.object.findUnique({
       where: { id },
-      include: managerInclude,
+      include: objectInclude,
     });
 
     if (!object) {
@@ -64,7 +71,7 @@ export class ObjectsService {
     return this.prisma.object.update({
       where: { id },
       data: dto,
-      include: managerInclude,
+      include: objectInclude,
     });
   }
 
@@ -74,8 +81,42 @@ export class ObjectsService {
     return this.prisma.object.update({
       where: { id },
       data: { status: 'inactive' },
-      include: managerInclude,
+      include: objectInclude,
     });
+  }
+
+  async hardDelete(id: string) {
+    const object = await this.prisma.object.findUnique({
+      where: { id },
+      include: {
+        _count: {
+          select: {
+            meters: true,
+            consumers: true,
+          },
+        },
+      },
+    });
+
+    if (!object) {
+      throw new NotFoundException('Объект не найден');
+    }
+
+    if (object.status !== 'inactive') {
+      throw new BadRequestException(
+        'Сначала выполните мягкое удаление (архивирование) объекта',
+      );
+    }
+
+    if (object._count.meters > 0 || object._count.consumers > 0) {
+      throw new ConflictException(
+        `Невозможно удалить объект окончательно: к нему привязано ${object._count.meters} счётчиков и ${object._count.consumers} потребителей`,
+      );
+    }
+
+    await this.prisma.object.delete({ where: { id } });
+
+    return { message: 'Объект удалён окончательно' };
   }
 
   private async ensureValidManager(managerId?: string) {

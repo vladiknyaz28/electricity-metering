@@ -1,7 +1,13 @@
 import { createRouter, createWebHistory } from 'vue-router'
+import { ElMessage } from 'element-plus'
 import { useAuthStore } from '../stores/auth'
 import LoginView from '../views/LoginView.vue'
+import MainLayout from '../layouts/MainLayout.vue'
 import DashboardView from '../views/DashboardView.vue'
+import ObjectsListView from '../views/ObjectsListView.vue'
+import ConsumersListView from '../views/ConsumersListView.vue'
+import MetersListView from '../views/MetersListView.vue'
+import StubView from '../views/StubView.vue'
 
 const router = createRouter({
   history: createWebHistory(),
@@ -14,9 +20,40 @@ const router = createRouter({
     },
     {
       path: '/',
-      name: 'dashboard',
-      component: DashboardView,
+      component: MainLayout,
       meta: { requiresAuth: true },
+      children: [
+        {
+          path: '',
+          name: 'dashboard',
+          component: DashboardView,
+        },
+        {
+          path: 'objects',
+          name: 'objects',
+          component: ObjectsListView,
+          meta: { roles: ['admin', 'object_manager'] },
+        },
+        {
+          path: 'consumers',
+          name: 'consumers',
+          component: ConsumersListView,
+          meta: { roles: ['admin', 'object_manager'] },
+        },
+        {
+          path: 'meters',
+          name: 'meters',
+          component: MetersListView,
+          meta: { roles: ['admin', 'object_manager', 'consumer'] },
+        },
+        {
+          path: 'readings',
+          name: 'readings',
+          component: StubView,
+          props: { title: 'Показания' },
+          meta: { roles: ['admin', 'object_manager', 'consumer'] },
+        },
+      ],
     },
     {
       path: '/:pathMatch(.*)*',
@@ -36,6 +73,16 @@ router.beforeEach((to) => {
   }
 
   if (to.path === '/login' && authStore.isAuthenticated) {
+    const redirect = typeof to.query.redirect === 'string' ? to.query.redirect : '/'
+    return redirect || '/'
+  }
+
+  const roles = to.matched
+    .map((record) => record.meta.roles as string[] | undefined)
+    .find((value) => Array.isArray(value) && value.length > 0)
+
+  if (roles && authStore.role && !roles.includes(authStore.role)) {
+    ElMessage.error('Недостаточно прав')
     return { path: '/' }
   }
 
