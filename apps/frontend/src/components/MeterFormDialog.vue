@@ -178,7 +178,7 @@ async function onSubmit() {
   try {
     const payload: CreateMeterPayload = {
       objectId: form.objectId,
-      consumerId: form.consumerId || null,
+      consumerId: form.isMain ? null : form.consumerId || null,
       ownerType: form.ownerType,
       name: form.name.trim(),
       serialNumber: form.serialNumber.trim(),
@@ -205,7 +205,13 @@ async function onSubmit() {
 
     emit('saved', saved)
     visible.value = false
-    ElMessage.success(isEdit.value ? 'Счётчик обновлён' : 'Счётчик создан')
+    if (form.isMain) {
+      ElMessage.success(
+        'Счётчик сохранён как главный. Предыдущий главный счётчик снят с этого статуса',
+      )
+    } else {
+      ElMessage.success(isEdit.value ? 'Счётчик обновлён' : 'Счётчик создан')
+    }
   } catch (error) {
     ElMessage.error(getErrorMessage(error))
   } finally {
@@ -229,6 +235,15 @@ watch(
       form.consumerId &&
       !objectConsumers.value.some((item) => item.id === form.consumerId)
     ) {
+      form.consumerId = null
+    }
+  },
+)
+
+watch(
+  () => form.isMain,
+  (isMain) => {
+    if (isMain) {
       form.consumerId = null
     }
   },
@@ -278,7 +293,7 @@ watch(
           clearable
           filterable
           style="width: 100%"
-          :disabled="!form.objectId"
+          :disabled="!form.objectId || form.isMain"
         >
           <el-option
             v-for="item in objectConsumers"
@@ -287,6 +302,20 @@ watch(
             :value="item.id"
           />
         </el-select>
+      </el-form-item>
+      <el-form-item>
+        <template #label>
+          <span class="switch-label">
+            Главный (вводной) счётчик объекта
+            <el-tooltip
+              content="На объекте может быть только один главный счётчик, он считает потребление ДО распределения по потребителям"
+              placement="top"
+            >
+              <span class="hint">?</span>
+            </el-tooltip>
+          </span>
+        </template>
+        <el-switch v-model="form.isMain" />
       </el-form-item>
       <div class="row">
         <el-form-item label="Владелец" prop="ownerType" class="half">
@@ -367,9 +396,6 @@ watch(
             <el-option label="Неактивен" value="inactive" />
           </el-select>
         </el-form-item>
-        <el-form-item label="Основной" class="half">
-          <el-switch v-model="form.isMain" />
-        </el-form-item>
       </div>
     </el-form>
 
@@ -398,5 +424,24 @@ watch(
   margin: 0 0 1rem;
   color: #4b5563;
   font-size: 14px;
+}
+
+.switch-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.hint {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #e5e7eb;
+  color: #4b5563;
+  font-size: 11px;
+  cursor: help;
 }
 </style>

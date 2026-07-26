@@ -92,7 +92,7 @@ model Meter {
   accuracyClass         String
   status                String
   verificationDueDate   DateTime?
-  isMain                Boolean
+  isMain                Boolean  @default(false)
   installationLocation  String
   hasCurrentTransformer Boolean
 

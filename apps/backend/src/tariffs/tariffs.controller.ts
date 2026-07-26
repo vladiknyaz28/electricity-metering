@@ -27,11 +27,13 @@ export class TariffsController {
   }
 
   @Get()
+  @Roles('admin', 'object_manager')
   findAll() {
     return this.tariffsService.findAll();
   }
 
   @Get(':id')
+  @Roles('admin', 'object_manager')
   findOne(@Param('id') id: string) {
     return this.tariffsService.findOne(id);
   }

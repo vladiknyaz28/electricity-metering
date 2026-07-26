@@ -41,8 +41,8 @@ type CurrentUser = {
 export class ConsumerService {
   constructor(private readonly prisma: PrismaService) {}
 
-  async create(dto: CreateConsumerDto) {
-    await this.ensureObjectExists(dto.objectId);
+  async create(dto: CreateConsumerDto, currentUser: CurrentUser) {
+    await this.assertManagedObjectAccess(dto.objectId, currentUser);
 
     return this.prisma.consumer.create({
       data: {
@@ -103,11 +103,12 @@ export class ConsumerService {
     return consumer;
   }
 
-  async update(id: string, dto: UpdateConsumerDto) {
-    await this.findExisting(id);
+  async update(id: string, dto: UpdateConsumerDto, currentUser: CurrentUser) {
+    const existing = await this.findExisting(id);
+    await this.assertManagedObjectAccess(existing.objectId, currentUser);
 
-    if (dto.objectId) {
-      await this.ensureObjectExists(dto.objectId);
+    if (dto.objectId && dto.objectId !== existing.objectId) {
+      await this.assertManagedObjectAccess(dto.objectId, currentUser);
     }
 
     return this.prisma.consumer.update({
@@ -117,8 +118,9 @@ export class ConsumerService {
     });
   }
 
-  async remove(id: string) {
-    await this.findExisting(id);
+  async remove(id: string, currentUser: CurrentUser) {
+    const existing = await this.findExisting(id);
+    await this.assertManagedObjectAccess(existing.objectId, currentUser);
 
     return this.prisma.consumer.update({
       where: { id },
@@ -127,14 +129,30 @@ export class ConsumerService {
     });
   }
 
-  async hardDelete(id: string) {
+  async hardDelete(id: string, currentUser: CurrentUser) {
     const consumer = await this.prisma.consumer.findUnique({
       where: { id },
-      include: consumerInclude,
+      include: {
+        ...consumerInclude,
+        object: {
+          select: {
+            id: true,
+            name: true,
+            managerId: true,
+          },
+        },
+      },
     });
 
     if (!consumer) {
       throw new NotFoundException('Потребитель не найден');
+    }
+
+    if (
+      currentUser.role === 'object_manager' &&
+      consumer.object.managerId !== currentUser.id
+    ) {
+      throw new ForbiddenException('Доступ запрещён');
     }
 
     if (consumer.status !== 'inactive') {
@@ -174,10 +192,20 @@ export class ConsumerService {
     return { id: '__none__' };
   }
 
-  private async ensureObjectExists(objectId: string) {
+  private async assertManagedObjectAccess(
+    objectId: string,
+    currentUser: CurrentUser,
+  ) {
     const object = await this.prisma.object.findUnique({ where: { id: objectId } });
     if (!object) {
       throw new NotFoundException('Объект не найден');
+    }
+
+    if (
+      currentUser.role === 'object_manager' &&
+      object.managerId !== currentUser.id
+    ) {
+      throw new ForbiddenException('Нет доступа к этому объекту');
     }
   }
 }

@@ -50,7 +50,12 @@ export class MetersService {
   async create(dto: CreateMeterDto, currentUser: CurrentUser) {
     const object = await this.getObjectOrThrow(dto.objectId);
     this.assertObjectManagerAccess(currentUser, object.managerId);
-    await this.ensureConsumerBelongsToObject(dto.consumerId, dto.objectId);
+
+    const isMain = dto.isMain ?? false;
+    const consumerId = isMain ? null : (dto.consumerId ?? null);
+    if (consumerId) {
+      await this.ensureConsumerBelongsToObject(consumerId, dto.objectId);
+    }
 
     const transformer = this.resolveTransformerFields(
       dto.hasCurrentTransformer ?? false,
@@ -59,27 +64,36 @@ export class MetersService {
     );
 
     try {
-      return await this.prisma.meter.create({
-        data: {
-          objectId: dto.objectId,
-          consumerId: dto.consumerId,
-          ownerType: dto.ownerType,
-          name: dto.name,
-          serialNumber: dto.serialNumber,
-          resourceTypeCode: dto.resourceTypeCode,
-          meterCategoryCode: dto.meterCategoryCode,
-          tariffType: dto.tariffType,
-          unit: dto.unit,
-          accuracyClass: dto.accuracyClass,
-          status: dto.status ?? 'active',
-          verificationDueDate: dto.verificationDueDate
-            ? new Date(dto.verificationDueDate)
-            : null,
-          isMain: dto.isMain ?? false,
-          installationLocation: dto.installationLocation,
-          ...transformer,
-        },
-        include: meterInclude,
+      return await this.prisma.$transaction(async (tx) => {
+        if (isMain) {
+          await tx.meter.updateMany({
+            where: { objectId: dto.objectId, isMain: true },
+            data: { isMain: false },
+          });
+        }
+
+        return tx.meter.create({
+          data: {
+            objectId: dto.objectId,
+            consumerId,
+            ownerType: dto.ownerType,
+            name: dto.name,
+            serialNumber: dto.serialNumber,
+            resourceTypeCode: dto.resourceTypeCode,
+            meterCategoryCode: dto.meterCategoryCode,
+            tariffType: dto.tariffType,
+            unit: dto.unit,
+            accuracyClass: dto.accuracyClass,
+            status: dto.status ?? 'active',
+            verificationDueDate: dto.verificationDueDate
+              ? new Date(dto.verificationDueDate)
+              : null,
+            isMain,
+            installationLocation: dto.installationLocation,
+            ...transformer,
+          },
+          include: meterInclude,
+        });
       });
     } catch (error) {
       this.rethrowSerialConflict(error);
@@ -123,12 +137,14 @@ export class MetersService {
     }
 
     const targetConsumerId =
-      dto.consumerId !== undefined ? dto.consumerId : existing.consumerId;
-    if (dto.consumerId !== undefined || dto.objectId) {
-      await this.ensureConsumerBelongsToObject(
-        targetConsumerId ?? undefined,
-        targetObjectId,
-      );
+      dto.isMain === true
+        ? null
+        : dto.consumerId !== undefined
+          ? dto.consumerId
+          : existing.consumerId;
+
+    if (targetConsumerId) {
+      await this.ensureConsumerBelongsToObject(targetConsumerId, targetObjectId);
     }
 
     const {
@@ -136,11 +152,17 @@ export class MetersService {
       primaryCurrent,
       secondaryCurrent,
       verificationDueDate,
+      isMain: dtoIsMain,
+      consumerId: _consumerId,
+      objectId: dtoObjectId,
       ...rest
     } = dto;
 
-    const data: Prisma.MeterUpdateInput = {
+    const data: Prisma.MeterUncheckedUpdateInput = {
       ...rest,
+      objectId: dtoObjectId,
+      isMain: dtoIsMain,
+      consumerId: dto.isMain === true ? null : dto.consumerId,
       verificationDueDate:
         verificationDueDate !== undefined
           ? verificationDueDate
@@ -170,10 +192,23 @@ export class MetersService {
     }
 
     try {
-      return await this.prisma.meter.update({
-        where: { id },
-        data,
-        include: meterInclude,
+      return await this.prisma.$transaction(async (tx) => {
+        if (dto.isMain === true) {
+          await tx.meter.updateMany({
+            where: {
+              objectId: targetObjectId,
+              isMain: true,
+              NOT: { id },
+            },
+            data: { isMain: false },
+          });
+        }
+
+        return tx.meter.update({
+          where: { id },
+          data,
+          include: meterInclude,
+        });
       });
     } catch (error) {
       this.rethrowSerialConflict(error);
@@ -193,6 +228,49 @@ export class MetersService {
       data: { status: 'inactive' },
       include: meterInclude,
     });
+  }
+
+  async hardDelete(id: string, currentUser: CurrentUser) {
+    const meter = await this.prisma.meter.findUnique({
+      where: { id },
+      include: {
+        object: {
+          select: {
+            managerId: true,
+          },
+        },
+        _count: {
+          select: {
+            readings: true,
+          },
+        },
+      },
+    });
+
+    if (!meter) {
+      throw new NotFoundException('Счётчик не найден');
+    }
+
+    if (
+      currentUser.role === 'object_manager' &&
+      meter.object.managerId !== currentUser.id
+    ) {
+      throw new ForbiddenException('Нет доступа к этому счётчику');
+    }
+
+    if (meter.status !== 'inactive') {
+      throw new BadRequestException('Сначала выполните мягкое удаление счётчика');
+    }
+
+    if (meter._count.readings > 0) {
+      throw new ConflictException(
+        `Невозможно удалить: у счётчика есть ${meter._count.readings} показаний`,
+      );
+    }
+
+    await this.prisma.meter.delete({ where: { id } });
+
+    return { message: 'Счётчик удалён окончательно' };
   }
 
   private resolveTransformerFields(

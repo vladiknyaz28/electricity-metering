@@ -89,16 +89,18 @@ function resetForm() {
 }
 
 async function loadOptions() {
-  try {
-    const [objectsData, tariffsData] = await Promise.all([
-      getObjects(),
-      getTariffs(),
-    ])
-    objects.value = objectsData
-    tariffs.value = tariffsData
-  } catch {
-    objects.value = []
-    tariffs.value = []
+  const [objectsResult, tariffsResult] = await Promise.allSettled([
+    getObjects(),
+    getTariffs(),
+  ])
+
+  objects.value =
+    objectsResult.status === 'fulfilled' ? objectsResult.value : []
+  tariffs.value =
+    tariffsResult.status === 'fulfilled' ? tariffsResult.value : []
+
+  if (objectsResult.status === 'rejected') {
+    ElMessage.error('Не удалось загрузить список объектов')
   }
 }
 
@@ -175,6 +177,7 @@ async function onSubmit() {
           :disabled="isEdit"
           filterable
           placeholder="Выберите объект"
+          no-data-text="Нет доступных объектов. Сначала создайте объект в разделе Объекты."
           style="width: 100%"
         >
           <el-option

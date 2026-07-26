@@ -7,7 +7,7 @@ import DashboardView from '../views/DashboardView.vue'
 import ObjectsListView from '../views/ObjectsListView.vue'
 import ConsumersListView from '../views/ConsumersListView.vue'
 import MetersListView from '../views/MetersListView.vue'
-import StubView from '../views/StubView.vue'
+import ReadingsListView from '../views/ReadingsListView.vue'
 
 const router = createRouter({
   history: createWebHistory(),
@@ -49,8 +49,7 @@ const router = createRouter({
         {
           path: 'readings',
           name: 'readings',
-          component: StubView,
-          props: { title: 'Показания' },
+          component: ReadingsListView,
           meta: { roles: ['admin', 'object_manager', 'consumer'] },
         },
       ],

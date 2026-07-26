@@ -5,7 +5,7 @@ import { Search } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import axios from 'axios'
 import { useAuthStore } from '../stores/auth'
-import { deleteMeter, getMeters } from '../api/meters'
+import { deleteMeter, getMeters, hardDeleteMeter } from '../api/meters'
 import { getObjects } from '../api/objects'
 import { getConsumers } from '../api/consumers'
 import type { Meter } from '../types/meter'
@@ -206,6 +206,29 @@ async function onDelete(meter: Meter) {
   }
 }
 
+function canHardDelete(meter: Meter) {
+  return meter.status === 'inactive' && (meter._count?.readings ?? 0) === 0
+}
+
+function getHardDeleteErrorMessage(error: unknown): string {
+  if (axios.isAxiosError(error)) {
+    const message = error.response?.data?.message
+    if (Array.isArray(message)) return message.join(', ')
+    if (typeof message === 'string' && message) return message
+  }
+  return 'Не удалось удалить счётчик окончательно'
+}
+
+async function onHardDelete(meter: Meter) {
+  try {
+    await hardDeleteMeter(meter.id)
+    meters.value = meters.value.filter((item) => item.id !== meter.id)
+    ElMessage.success('Счётчик удалён окончательно')
+  } catch (error) {
+    ElMessage.error(getHardDeleteErrorMessage(error))
+  }
+}
+
 function goToReadings(meterId: string) {
   router.push({ path: '/readings', query: { meterId } })
 }
@@ -315,6 +338,9 @@ onMounted(async () => {
           :status-label="statusLabel(item.status)"
           :status-type="item.status === 'active' ? 'success' : 'info'"
         >
+          <template v-if="item.isMain" #header-extra>
+            <el-tag type="warning" size="small">Главный</el-tag>
+          </template>
           <div class="line">Серийный номер: {{ item.serialNumber }}</div>
           <div
             v-if="item.transformerRatio != null && item.transformerRatio !== ''"
@@ -360,6 +386,18 @@ onMounted(async () => {
             >
               <template #reference>
                 <el-button type="danger" plain>Удалить</el-button>
+              </template>
+            </el-popconfirm>
+            <el-popconfirm
+              v-if="canHardDelete(item)"
+              title="Это действие необратимо. Счётчик будет удалён без возможности восстановления. Продолжить?"
+              confirm-button-text="Да, удалить навсегда"
+              cancel-button-text="Отмена"
+              confirm-button-type="danger"
+              @confirm="onHardDelete(item)"
+            >
+              <template #reference>
+                <el-button type="danger">Удалить окончательно</el-button>
               </template>
             </el-popconfirm>
           </template>

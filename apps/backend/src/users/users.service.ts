@@ -1,5 +1,11 @@
-import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import * as bcrypt from 'bcrypt';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
@@ -29,8 +35,12 @@ export class UsersService {
     return this.sanitize(user);
   }
 
-  async findAll() {
-    const users = await this.prisma.user.findMany({ orderBy: { createdAt: 'desc' } });
+  async findAll(role?: string) {
+    const where: Prisma.UserWhereInput = role ? { role } : {};
+    const users = await this.prisma.user.findMany({
+      where,
+      orderBy: { createdAt: 'desc' },
+    });
     return users.map((u) => this.sanitize(u));
   }
 
@@ -67,6 +77,39 @@ export class UsersService {
       data: { status: 'inactive' },
     });
     return this.sanitize(user);
+  }
+
+  async hardDelete(id: string) {
+    const user = await this.prisma.user.findUnique({
+      where: { id },
+      include: {
+        _count: {
+          select: {
+            managedObjects: true,
+          },
+        },
+      },
+    });
+
+    if (!user) {
+      throw new NotFoundException('Пользователь не найден');
+    }
+
+    if (user.status !== 'inactive') {
+      throw new BadRequestException(
+        'Сначала выполните мягкое удаление (деактивацию) пользователя',
+      );
+    }
+
+    if (user._count.managedObjects > 0) {
+      throw new ConflictException(
+        `Невозможно удалить: пользователь назначен менеджером на ${user._count.managedObjects} объектов`,
+      );
+    }
+
+    await this.prisma.user.delete({ where: { id } });
+
+    return { message: 'Пользователь удалён окончательно' };
   }
 
   private sanitize(user: any) {

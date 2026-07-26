@@ -20,6 +20,8 @@ const route = useRoute()
 const router = useRouter()
 const authStore = useAuthStore()
 const isAdmin = computed(() => authStore.role === 'admin')
+const isManager = computed(() => authStore.role === 'object_manager')
+const canManage = computed(() => isAdmin.value || isManager.value)
 
 const consumers = ref<Consumer[]>([])
 const objects = ref<EnergyObject[]>([])
@@ -269,7 +271,7 @@ onMounted(async () => {
             :value="item.id"
           />
         </el-select>
-        <el-button v-if="isAdmin" type="primary" @click="openCreate">
+        <el-button v-if="canManage" type="primary" @click="openCreate">
           Добавить потребителя
         </el-button>
       </div>
@@ -300,7 +302,7 @@ onMounted(async () => {
       v-if="!loading && consumers.length === 0"
       description="Пока нет ни одного потребителя"
     >
-      <el-button v-if="isAdmin" type="primary" @click="openCreate">
+      <el-button v-if="canManage" type="primary" @click="openCreate">
         Добавить потребителя
       </el-button>
     </el-empty>
@@ -342,7 +344,7 @@ onMounted(async () => {
             <span>Пользователи: {{ item._count?.users ?? 0 }}</span>
           </div>
 
-          <template v-if="isAdmin" #actions>
+          <template v-if="canManage" #actions>
             <el-button type="primary" plain @click="openEdit(item)">
               Редактировать
             </el-button>

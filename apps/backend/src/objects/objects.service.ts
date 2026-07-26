@@ -16,6 +16,7 @@ const objectInclude = {
       id: true,
       fullName: true,
       email: true,
+      status: true,
     },
   },
   _count: {
@@ -36,8 +37,13 @@ type CurrentUser = {
 export class ObjectsService {
   constructor(private readonly prisma: PrismaService) {}
 
-  async create(dto: CreateObjectDto) {
-    await this.ensureValidManager(dto.managerId);
+  async create(dto: CreateObjectDto, currentUser: CurrentUser) {
+    const managerId =
+      currentUser.role === 'object_manager' ? currentUser.id : dto.managerId;
+
+    if (currentUser.role !== 'object_manager') {
+      await this.ensureValidManager(managerId);
+    }
 
     return this.prisma.object.create({
       data: {
@@ -46,7 +52,7 @@ export class ObjectsService {
         typeCode: dto.typeCode,
         categoryCode: dto.categoryCode,
         status: dto.status ?? 'active',
-        managerId: dto.managerId,
+        managerId,
       },
       include: objectInclude,
     });
@@ -70,35 +76,128 @@ export class ObjectsService {
       throw new NotFoundException('Объект не найден');
     }
 
-    if (
-      currentUser.role === 'object_manager' &&
-      object.managerId !== currentUser.id
-    ) {
-      throw new ForbiddenException('Нет доступа к этому объекту');
-    }
+    this.assertObjectOwnership(object.managerId, currentUser);
 
     return object;
   }
 
-  async update(id: string, dto: UpdateObjectDto) {
-    await this.getOrThrow(id);
-    await this.ensureValidManager(dto.managerId);
+  async update(id: string, dto: UpdateObjectDto, currentUser: CurrentUser) {
+    const existing = await this.getOrThrow(id);
+    this.assertObjectOwnership(existing.managerId, currentUser);
+
+    const data: UpdateObjectDto = { ...dto };
+
+    if (currentUser.role === 'object_manager') {
+      delete data.managerId;
+    } else {
+      await this.ensureValidManager(data.managerId);
+    }
 
     return this.prisma.object.update({
       where: { id },
-      data: dto,
+      data,
       include: objectInclude,
     });
   }
 
-  async remove(id: string) {
-    await this.getOrThrow(id);
+  async remove(id: string, currentUser: CurrentUser) {
+    const existing = await this.getOrThrow(id);
+    this.assertObjectOwnership(existing.managerId, currentUser);
 
     return this.prisma.object.update({
       where: { id },
       data: { status: 'inactive' },
       include: objectInclude,
     });
+  }
+
+  async getMinusovka(
+    id: string,
+    periodStart: string,
+    periodEnd: string,
+    currentUser: CurrentUser,
+  ) {
+    if (!periodStart || !periodEnd) {
+      throw new BadRequestException(
+        'Параметры periodStart и periodEnd обязательны (YYYY-MM-DD)',
+      );
+    }
+
+    const object = await this.getOrThrow(id);
+    this.assertObjectOwnership(object.managerId, currentUser);
+
+    const start = new Date(`${periodStart}T00:00:00.000Z`);
+    const end = new Date(`${periodEnd}T23:59:59.999Z`);
+
+    if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) {
+      throw new BadRequestException('Некорректный формат даты периода');
+    }
+
+    if (start > end) {
+      throw new BadRequestException(
+        'periodStart не может быть позже periodEnd',
+      );
+    }
+
+    const meters = await this.prisma.meter.findMany({
+      where: { objectId: id },
+      include: {
+        consumer: {
+          select: { id: true, name: true },
+        },
+      },
+    });
+
+    const mainMeter = meters.find((meter) => meter.isMain);
+    if (!mainMeter) {
+      return { hasMainMeter: false as const };
+    }
+
+    const mainConsumption = await this.meterPeriodConsumption(
+      mainMeter.id,
+      start,
+      end,
+      mainMeter.transformerRatio,
+    );
+
+    const consumerMeters = meters.filter(
+      (meter) => meter.consumerId != null && !meter.isMain,
+    );
+    const breakdown: Array<{
+      meterId: string;
+      meterName: string;
+      consumerName: string | null;
+      consumption: number;
+    }> = [];
+
+    let subConsumersConsumption = 0;
+    for (const meter of consumerMeters) {
+      const consumption = await this.meterPeriodConsumption(
+        meter.id,
+        start,
+        end,
+        meter.transformerRatio,
+      );
+      subConsumersConsumption += consumption;
+      breakdown.push({
+        meterId: meter.id,
+        meterName: meter.name,
+        consumerName: meter.consumer?.name ?? null,
+        consumption,
+      });
+    }
+
+    const minusovka = mainConsumption - subConsumersConsumption;
+
+    return {
+      hasMainMeter: true as const,
+      mainMeterId: mainMeter.id,
+      mainConsumption,
+      subConsumersConsumption,
+      minusovka,
+      isAnomaly: minusovka < 0,
+      breakdown,
+    };
   }
 
   async hardDelete(id: string) {
@@ -147,6 +246,19 @@ export class ObjectsService {
     return { id: '__none__' };
   }
 
+  private assertObjectOwnership(
+    managerId: string | null,
+    currentUser: CurrentUser,
+  ) {
+    if (currentUser.role !== 'object_manager') {
+      return;
+    }
+
+    if (managerId !== currentUser.id) {
+      throw new ForbiddenException('Нет доступа к этому объекту');
+    }
+  }
+
   private async getOrThrow(id: string) {
     const object = await this.prisma.object.findUnique({ where: { id } });
     if (!object) {
@@ -155,7 +267,56 @@ export class ObjectsService {
     return object;
   }
 
-  private async ensureValidManager(managerId?: string) {
+  private async meterPeriodConsumption(
+    meterId: string,
+    periodStart: Date,
+    periodEnd: Date,
+    transformerRatio: Prisma.Decimal | number | null,
+  ): Promise<number> {
+    const startReading = await this.prisma.meterReading.findFirst({
+      where: {
+        meterId,
+        readingDate: { lte: periodStart },
+      },
+      orderBy: { readingDate: 'desc' },
+    });
+
+    const endReading = await this.prisma.meterReading.findFirst({
+      where: {
+        meterId,
+        readingDate: { lte: periodEnd },
+      },
+      orderBy: { readingDate: 'desc' },
+    });
+
+    if (!startReading || !endReading) {
+      return 0;
+    }
+
+    const startTotal = this.readingTotal(startReading);
+    const endTotal = this.readingTotal(endReading);
+    const raw = endTotal - startTotal;
+    const ratio =
+      transformerRatio == null || transformerRatio === undefined
+        ? 1
+        : Number(transformerRatio);
+
+    return raw * (Number.isFinite(ratio) && ratio > 0 ? ratio : 1);
+  }
+
+  private readingTotal(reading: {
+    valueT1: number;
+    valueT2: number | null;
+    valueT3: number | null;
+  }): number {
+    return (
+      Number(reading.valueT1) +
+      Number(reading.valueT2 ?? 0) +
+      Number(reading.valueT3 ?? 0)
+    );
+  }
+
+  private async ensureValidManager(managerId?: string | null) {
     if (!managerId) {
       return;
     }

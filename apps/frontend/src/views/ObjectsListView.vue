@@ -9,11 +9,15 @@ import { deleteObject, getObjects, hardDeleteObject } from '../api/objects'
 import type { EnergyObject } from '../types/object'
 import ObjectFormDialog from '../components/ObjectFormDialog.vue'
 import EntityCard from '../components/EntityCard.vue'
+import ManagersDrawer from '../components/ManagersDrawer.vue'
+import MinusovkaDialog from '../components/MinusovkaDialog.vue'
 
 const route = useRoute()
 const router = useRouter()
 const authStore = useAuthStore()
 const isAdmin = computed(() => authStore.role === 'admin')
+const isManager = computed(() => authStore.role === 'object_manager')
+const canManage = computed(() => isAdmin.value || isManager.value)
 
 const objects = ref<EnergyObject[]>([])
 const loading = ref(false)
@@ -25,6 +29,9 @@ const highlightedId = ref<string | null>(null)
 
 const dialogVisible = ref(false)
 const editingObject = ref<EnergyObject | null>(null)
+const managersDrawerVisible = ref(false)
+const minusovkaVisible = ref(false)
+const minusovkaObject = ref<EnergyObject | null>(null)
 
 const filteredObjects = computed(() => {
   const query = search.value.trim().toLowerCase()
@@ -67,6 +74,11 @@ function openCreate() {
 function openEdit(object: EnergyObject) {
   editingObject.value = object
   dialogVisible.value = true
+}
+
+function openMinusovka(object: EnergyObject) {
+  minusovkaObject.value = object
+  minusovkaVisible.value = true
 }
 
 function onSaved(saved: EnergyObject) {
@@ -200,7 +212,10 @@ onMounted(async () => {
           <el-option label="Активен" value="active" />
           <el-option label="Неактивен" value="inactive" />
         </el-select>
-        <el-button v-if="isAdmin" type="primary" @click="openCreate">
+        <el-button v-if="isAdmin" @click="managersDrawerVisible = true">
+          Менеджеры
+        </el-button>
+        <el-button v-if="canManage" type="primary" @click="openCreate">
           Добавить объект
         </el-button>
       </div>
@@ -214,7 +229,7 @@ onMounted(async () => {
           : 'Вам пока не назначены объекты. Обратитесь к администратору.'
       "
     >
-      <el-button v-if="isAdmin" type="primary" @click="openCreate">
+      <el-button v-if="canManage" type="primary" @click="openCreate">
         Добавить объект
       </el-button>
     </el-empty>
@@ -237,6 +252,9 @@ onMounted(async () => {
         >
           <div class="meta">{{ item.typeCode }} · {{ item.categoryCode }}</div>
           <div class="address">{{ item.address }}</div>
+          <div class="line">
+            Менеджер: {{ item.manager?.fullName ?? 'Не назначен' }}
+          </div>
           <div class="id">id: {{ shortId(item.id) }}</div>
 
           <div class="counts">
@@ -248,7 +266,15 @@ onMounted(async () => {
             </el-link>
           </div>
 
-          <template v-if="isAdmin" #actions>
+          <template v-if="canManage" #actions>
+            <el-button
+              v-if="(item._count?.meters ?? 0) > 0"
+              type="warning"
+              plain
+              @click="openMinusovka(item)"
+            >
+              Минусовка
+            </el-button>
             <el-button type="primary" plain @click="openEdit(item)">
               Редактировать
             </el-button>
@@ -263,7 +289,7 @@ onMounted(async () => {
               </template>
             </el-popconfirm>
             <el-popconfirm
-              v-if="canHardDelete(item)"
+              v-if="isAdmin && canHardDelete(item)"
               title="Это действие необратимо. Объект и вся история будут удалены без возможности восстановления. Продолжить?"
               confirm-button-text="Да, удалить навсегда"
               cancel-button-text="Отмена"
@@ -293,6 +319,14 @@ onMounted(async () => {
       v-model="dialogVisible"
       :object="editingObject"
       @saved="onSaved"
+    />
+    <MinusovkaDialog
+      v-model="minusovkaVisible"
+      :object="minusovkaObject"
+    />
+    <ManagersDrawer
+      v-model="managersDrawerVisible"
+      @changed="loadObjects"
     />
   </div>
 </template>

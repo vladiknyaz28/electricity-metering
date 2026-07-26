@@ -55,6 +55,15 @@ export class MetersController {
     return this.metersService.update(id, dto, currentUser);
   }
 
+  @Delete(':id/permanent')
+  @Roles('admin', 'object_manager')
+  hardDelete(
+    @Param('id') id: string,
+    @CurrentUser() currentUser: AuthUser,
+  ) {
+    return this.metersService.hardDelete(id, currentUser);
+  }
+
   @Delete(':id')
   @Roles('admin', 'object_manager')
   remove(@Param('id') id: string, @CurrentUser() currentUser: AuthUser) {

@@ -8,6 +8,7 @@ import {
   getManagers,
   updateObject,
 } from '../api/objects'
+import { useAuthStore } from '../stores/auth'
 import type { AuthUser } from '../types/auth'
 import type { CreateObjectPayload, EnergyObject } from '../types/object'
 
@@ -20,6 +21,9 @@ const emit = defineEmits<{
   'update:modelValue': [value: boolean]
   saved: [object: EnergyObject]
 }>()
+
+const authStore = useAuthStore()
+const isManager = computed(() => authStore.role === 'object_manager')
 
 const formRef = ref<FormInstance>()
 const saving = ref(false)
@@ -76,6 +80,10 @@ function resetForm() {
 }
 
 async function loadManagers() {
+  if (isManager.value) {
+    managers.value = []
+    return
+  }
   try {
     managers.value = await getManagers()
   } catch {
@@ -115,14 +123,14 @@ async function onSubmit() {
       categoryCode: form.categoryCode,
     }
 
-    if (form.managerId) {
+    if (!isManager.value && form.managerId) {
       payload.managerId = form.managerId
     }
 
     let saved: EnergyObject
     if (isEdit.value && props.object) {
       payload.status = form.status
-      if (form.managerId) {
+      if (!isManager.value) {
         payload.managerId = form.managerId
       }
       saved = await updateObject(props.object.id, payload)
@@ -189,7 +197,7 @@ async function onSubmit() {
         </el-select>
       </el-form-item>
 
-      <el-form-item label="Менеджер объекта">
+      <el-form-item v-if="!isManager" label="Менеджер объекта">
         <el-select
           v-model="form.managerId"
           clearable
@@ -204,6 +212,12 @@ async function onSubmit() {
             :label="`${manager.fullName} (${manager.email})`"
           />
         </el-select>
+      </el-form-item>
+      <el-form-item v-else label="Менеджер объекта">
+        <el-input
+          :model-value="authStore.user?.fullName || authStore.user?.email || 'Вы'"
+          disabled
+        />
       </el-form-item>
 
       <el-form-item v-if="isEdit" label="Статус" prop="status">

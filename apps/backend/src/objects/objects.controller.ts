@@ -6,6 +6,7 @@ import {
   Param,
   Patch,
   Post,
+  Query,
   UseGuards,
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
@@ -28,15 +29,34 @@ export class ObjectsController {
   constructor(private readonly objectsService: ObjectsService) {}
 
   @Post()
-  @Roles('admin')
-  create(@Body() dto: CreateObjectDto) {
-    return this.objectsService.create(dto);
+  @Roles('admin', 'object_manager')
+  create(
+    @Body() dto: CreateObjectDto,
+    @CurrentUser() currentUser: AuthUser,
+  ) {
+    return this.objectsService.create(dto, currentUser);
   }
 
   @Get()
   @Roles('admin', 'object_manager')
   findAll(@CurrentUser() currentUser: AuthUser) {
     return this.objectsService.findAll(currentUser);
+  }
+
+  @Get(':id/minusovka')
+  @Roles('admin', 'object_manager')
+  getMinusovka(
+    @Param('id') id: string,
+    @Query('periodStart') periodStart: string,
+    @Query('periodEnd') periodEnd: string,
+    @CurrentUser() currentUser: AuthUser,
+  ) {
+    return this.objectsService.getMinusovka(
+      id,
+      periodStart,
+      periodEnd,
+      currentUser,
+    );
   }
 
   @Get(':id')
@@ -49,9 +69,13 @@ export class ObjectsController {
   }
 
   @Patch(':id')
-  @Roles('admin')
-  update(@Param('id') id: string, @Body() dto: UpdateObjectDto) {
-    return this.objectsService.update(id, dto);
+  @Roles('admin', 'object_manager')
+  update(
+    @Param('id') id: string,
+    @Body() dto: UpdateObjectDto,
+    @CurrentUser() currentUser: AuthUser,
+  ) {
+    return this.objectsService.update(id, dto, currentUser);
   }
 
   @Delete(':id/permanent')
@@ -61,8 +85,11 @@ export class ObjectsController {
   }
 
   @Delete(':id')
-  @Roles('admin')
-  remove(@Param('id') id: string) {
-    return this.objectsService.remove(id);
+  @Roles('admin', 'object_manager')
+  remove(
+    @Param('id') id: string,
+    @CurrentUser() currentUser: AuthUser,
+  ) {
+    return this.objectsService.remove(id, currentUser);
   }
 }

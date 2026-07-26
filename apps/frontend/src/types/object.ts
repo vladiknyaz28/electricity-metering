@@ -2,6 +2,7 @@ export interface ObjectManager {
   id: string
   fullName: string
   email: string
+  status?: string
 }
 
 export interface EnergyObject {

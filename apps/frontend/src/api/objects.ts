@@ -1,4 +1,5 @@
 import api from './client'
+import { getUsers } from './users'
 import type { AuthUser } from '../types/auth'
 import type { CreateObjectPayload, EnergyObject } from '../types/object'
 
@@ -8,8 +9,7 @@ export async function getObjects(): Promise<EnergyObject[]> {
 }
 
 export async function getManagers(): Promise<AuthUser[]> {
-  const { data } = await api.get<AuthUser[]>('/users')
-  return data.filter((user) => user.role === 'object_manager')
+  return getUsers('object_manager')
 }
 
 export async function createObject(
