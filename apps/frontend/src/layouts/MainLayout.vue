@@ -11,7 +11,7 @@ const displayName = computed(
 )
 
 const menuItems = [
-  { path: '/', label: 'Дашборд' },
+  { path: '/dashboard', label: 'Дашборд' },
   { path: '/objects', label: 'Объекты' },
   { path: '/consumers', label: 'Потребители' },
   { path: '/meters', label: 'Счётчики' },
@@ -20,9 +20,6 @@ const menuItems = [
 ]
 
 function isActive(path: string) {
-  if (path === '/') {
-    return route.path === '/'
-  }
   return route.path === path || route.path.startsWith(`${path}/`)
 }
 </script>
@@ -60,7 +57,7 @@ function isActive(path: string) {
 .layout {
   display: flex;
   min-height: 100vh;
-  background: #f4f6f8;
+  background: #f5f7fa;
 }
 
 .sidebar {

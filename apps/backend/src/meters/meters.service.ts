@@ -472,6 +472,34 @@ export class MetersService {
     periodEnd: Date,
     options?: { exclusiveStart?: boolean },
   ): Promise<{ consumption: number; hasData: boolean }> {
+    const detailed = await this.calculateMeterConsumptionDetailed(
+      meterId,
+      periodStart,
+      periodEnd,
+      options,
+    );
+    return {
+      consumption: detailed.consumption,
+      hasData: detailed.hasData,
+    };
+  }
+
+  async calculateMeterConsumptionDetailed(
+    meterId: string,
+    periodStart: Date,
+    periodEnd: Date,
+    options?: { exclusiveStart?: boolean },
+  ): Promise<{
+    consumption: number;
+    byZone: { T1: number; T2: number; T3: number };
+    hasData: boolean;
+  }> {
+    const empty = {
+      consumption: 0,
+      byZone: { T1: 0, T2: 0, T3: 0 },
+      hasData: false,
+    };
+
     const meter = await this.prisma.meter.findUnique({
       where: { id: meterId },
       select: {
@@ -482,7 +510,7 @@ export class MetersService {
     });
 
     if (!meter) {
-      return { consumption: 0, hasData: false };
+      return empty;
     }
 
     const startBound = this.startOfUtcDay(periodStart);
@@ -505,12 +533,14 @@ export class MetersService {
       this.logger.debug(
         `[consumption] meter=${meterId} readings=${readings.length} → 0`,
       );
-      return { consumption: 0, hasData: false };
+      return empty;
     }
 
     const ratio = this.resolveTransformerRatio(meter.transformerRatio);
 
-    let consumption = 0;
+    let cT1Sum = 0;
+    let cT2Sum = 0;
+    let cT3Sum = 0;
     let intervals = 0;
 
     for (let index = 1; index < readings.length; index++) {
@@ -531,20 +561,23 @@ export class MetersService {
       const cT2 = this.round4((curPhys.T2 - prevPhys.T2) * ratio);
       const cT3 = this.round4((curPhys.T3 - prevPhys.T3) * ratio);
 
-      consumption += this.round4(
-        totalConsumptionFromZones(cT1, cT2, cT3),
-      );
+      cT1Sum = this.round4(cT1Sum + cT1);
+      cT2Sum = this.round4(cT2Sum + cT2);
+      cT3Sum = this.round4(cT3Sum + cT3);
       intervals += 1;
     }
 
-    consumption = this.round4(consumption);
+    const byZone = { T1: cT1Sum, T2: cT2Sum, T3: cT3Sum };
+    const consumption = this.round4(
+      totalConsumptionFromZones(cT1Sum, cT2Sum, cT3Sum),
+    );
 
     this.logger.debug(
       `[consumption] meter=${meterId} period=${startBound.toISOString().slice(0, 10)}..${endBound.toISOString().slice(0, 10)} ` +
         `exclusiveStart=${exclusiveStart} intervals=${intervals} consumption=${consumption}`,
     );
 
-    return { consumption, hasData: intervals > 0 };
+    return { consumption, byZone, hasData: intervals > 0 };
   }
 
   private resolveTransformerRatio(

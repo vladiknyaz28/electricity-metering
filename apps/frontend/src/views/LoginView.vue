@@ -21,8 +21,11 @@ async function onSubmit() {
     await authStore.login(email.value, password.value)
     await authStore.fetchProfile()
 
-    const redirect = typeof route.query.redirect === 'string' ? route.query.redirect : '/'
-    await router.push(redirect || '/')
+    const redirect =
+      typeof route.query.redirect === 'string'
+        ? route.query.redirect
+        : '/dashboard'
+    await router.push(redirect || '/dashboard')
   } catch (error) {
     if (axios.isAxiosError(error)) {
       if (error.response?.status === 401) {

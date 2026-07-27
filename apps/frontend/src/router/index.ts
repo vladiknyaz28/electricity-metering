@@ -26,6 +26,10 @@ const router = createRouter({
       children: [
         {
           path: '',
+          redirect: '/dashboard',
+        },
+        {
+          path: 'dashboard',
           name: 'dashboard',
           component: DashboardView,
         },
@@ -63,7 +67,7 @@ const router = createRouter({
     },
     {
       path: '/:pathMatch(.*)*',
-      redirect: '/',
+      redirect: '/dashboard',
     },
   ],
 })
@@ -79,8 +83,9 @@ router.beforeEach((to) => {
   }
 
   if (to.path === '/login' && authStore.isAuthenticated) {
-    const redirect = typeof to.query.redirect === 'string' ? to.query.redirect : '/'
-    return redirect || '/'
+    const redirect =
+      typeof to.query.redirect === 'string' ? to.query.redirect : '/dashboard'
+    return redirect || '/dashboard'
   }
 
   const roles = to.matched
@@ -89,7 +94,7 @@ router.beforeEach((to) => {
 
   if (roles && authStore.role && !roles.includes(authStore.role)) {
     ElMessage.error('Недостаточно прав')
-    return { path: '/' }
+    return { path: '/dashboard' }
   }
 
   return true
