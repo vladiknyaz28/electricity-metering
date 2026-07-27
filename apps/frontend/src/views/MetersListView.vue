@@ -13,7 +13,11 @@ import type { EnergyObject } from '../types/object'
 import type { Consumer } from '../types/consumer'
 import EntityCard from '../components/EntityCard.vue'
 import MeterFormDialog from '../components/MeterFormDialog.vue'
-import MinusovkaDialog from '../components/MinusovkaDialog.vue'
+import {
+  resourceTypeColor,
+  resourceTypeSoftBg,
+  resourceTypeTitle,
+} from '../utils/resourceColors'
 
 const route = useRoute()
 const router = useRouter()
@@ -30,14 +34,13 @@ const loading = ref(false)
 const search = ref('')
 const statusFilter = ref<'all' | 'active' | 'inactive'>('all')
 const objectFilter = ref<string>('all')
+const resourceTypeFilter = ref<string>('all')
 const consumerFilterId = ref<string | null>(null)
 const currentPage = ref(1)
 const pageSize = 9
 
 const dialogVisible = ref(false)
 const editingMeter = ref<Meter | null>(null)
-const minusovkaVisible = ref(false)
-const minusovkaMeter = ref<Meter | null>(null)
 
 const tariffTypeLabels: Record<string, string> = {
   single: 'Однотарифный',
@@ -92,6 +95,10 @@ const filteredMeters = computed(() => {
         : true
     const matchesStatus =
       statusFilter.value === 'all' ? true : item.status === statusFilter.value
+    const matchesResource =
+      resourceTypeFilter.value === 'all'
+        ? true
+        : item.resourceTypeId === resourceTypeFilter.value
     const matchesSearch =
       !query ||
       item.name.toLowerCase().includes(query) ||
@@ -102,10 +109,62 @@ const filteredMeters = computed(() => {
       matchesObjectQuery &&
       matchesConsumerQuery &&
       matchesStatus &&
+      matchesResource &&
       matchesSearch
     )
   })
   return sortMetersByHierarchy(matched)
+})
+
+const resourceTypeOptions = computed(() => {
+  const map = new Map<string, string>()
+  for (const meter of meters.value) {
+    if (!meter.resourceTypeId) continue
+    const name =
+      meter.resourceType?.name || meter.resourceTypeCode || 'Ресурс'
+    if (!map.has(meter.resourceTypeId)) {
+      map.set(meter.resourceTypeId, name)
+    }
+  }
+  return [...map.entries()]
+    .map(([id, name]) => ({ id, name }))
+    .sort((a, b) => a.name.localeCompare(b.name, 'ru'))
+})
+
+type MeterResourceGroup = {
+  key: string
+  resourceTypeId: string | null
+  name: string
+  title: string
+  meters: Meter[]
+}
+
+const pagedMeterGroups = computed((): MeterResourceGroup[] => {
+  const start = (currentPage.value - 1) * pageSize
+  const pageItems = filteredMeters.value.slice(start, start + pageSize)
+  const order: string[] = []
+  const buckets = new Map<string, MeterResourceGroup>()
+
+  for (const meter of pageItems) {
+    const key = meter.resourceTypeId ?? '__none__'
+    if (!buckets.has(key)) {
+      const name =
+        meter.resourceType?.name || meter.resourceTypeCode || 'Без типа ресурса'
+      order.push(key)
+      buckets.set(key, {
+        key,
+        resourceTypeId: meter.resourceTypeId,
+        name,
+        title: resourceTypeTitle(name),
+        meters: [],
+      })
+    }
+    buckets.get(key)!.meters.push(meter)
+  }
+
+  return order
+    .map((key) => buckets.get(key)!)
+    .sort((a, b) => a.title.localeCompare(b.title, 'ru'))
 })
 
 /** Children immediately after their parent (flat grouping). */
@@ -156,16 +215,6 @@ function parentTagLabel(meter: Meter) {
   const name = meter.parentMeter.name || meter.parentMeter.serialNumber
   return `${name}`
 }
-
-function openMinusovka(meter: Meter) {
-  minusovkaMeter.value = meter
-  minusovkaVisible.value = true
-}
-
-const pagedMeters = computed(() => {
-  const start = (currentPage.value - 1) * pageSize
-  return filteredMeters.value.slice(start, start + pageSize)
-})
 
 const totalFiltered = computed(() => filteredMeters.value.length)
 
@@ -355,6 +404,20 @@ onMounted(async () => {
             :value="item.id"
           />
         </el-select>
+        <el-select
+          v-model="resourceTypeFilter"
+          filterable
+          style="width: 200px"
+          @change="currentPage = 1"
+        >
+          <el-option label="Все ресурсы" value="all" />
+          <el-option
+            v-for="item in resourceTypeOptions"
+            :key="item.id"
+            :label="item.name"
+            :value="item.id"
+          />
+        </el-select>
         <el-button v-if="canManage" type="primary" @click="openCreate">
           Добавить счётчик
         </el-button>
@@ -394,109 +457,126 @@ onMounted(async () => {
     />
 
     <template v-else-if="!loading">
-      <div class="grid">
-        <EntityCard
-          v-for="item in pagedMeters"
-          :key="item.id"
-          :title="`${item.name} · ${item.serialNumber}`"
-          :status-label="statusLabel(item.status)"
-          :status-type="item.status === 'active' ? 'success' : 'info'"
+      <div
+        v-for="group in pagedMeterGroups"
+        :key="group.key"
+        class="resource-group"
+      >
+        <h3
+          class="resource-group-title"
+          :style="{
+            color: resourceTypeColor(group.name),
+            background: resourceTypeSoftBg(group.name),
+            borderLeftColor: resourceTypeColor(group.name),
+          }"
         >
-          <div
-            v-if="item.isMain || item.parentMeterId || (item._count?.children ?? 0) > 0"
-            class="tags"
+          {{ group.title }}
+        </h3>
+        <div class="grid">
+          <EntityCard
+            v-for="item in group.meters"
+            :key="item.id"
+            :title="`${item.name} · ${item.serialNumber}`"
+            :status-label="statusLabel(item.status)"
+            :status-type="item.status === 'active' ? 'success' : 'info'"
           >
-            <el-tag v-if="item.isMain" type="warning" size="small">
-              Главный
-            </el-tag>
-            <el-tag v-if="item.parentMeterId" type="info" size="small">
-              Подчинён: {{ parentTagLabel(item) }}
-            </el-tag>
-            <el-tag
-              v-if="(item._count?.children ?? 0) > 0"
-              type="success"
-              size="small"
+            <div
+              v-if="item.isMain || item.parentMeterId || (item._count?.children ?? 0) > 0"
+              class="tags"
             >
-              Групповой (подчинено счётчиков:
-              {{ item._count.children }})
-            </el-tag>
-          </div>
-          <div class="line">Серийный номер: {{ item.serialNumber }}</div>
-          <div class="line">
-            Ресурс:
-            {{ item.resourceType?.name || item.resourceTypeCode || '—' }}
-            <template v-if="meterUnit(item)">
-              ({{ meterUnit(item) }})
-            </template>
-          </div>
-          <div
-            v-if="item.transformerRatio != null && item.transformerRatio !== ''"
-            class="line"
-          >
-            Коэфф. трансформации:
-            {{ item.primaryCurrent }}/{{ item.secondaryCurrent }} =
-            {{ formatRatio(item.transformerRatio) }}
-          </div>
-          <div class="line">
-            Объект:
-            <el-link type="primary" @click="goToObject(item.objectId)">
-              → {{ item.object?.name || '—' }}
-            </el-link>
-          </div>
-          <div class="line">
-            Потребитель:
-            <el-link
-              v-if="item.consumerId"
-              type="primary"
-              @click="goToConsumer(item.consumerId)"
+              <el-tag v-if="item.isMain" type="warning" size="small">
+                Главный
+              </el-tag>
+              <el-tag v-if="item.parentMeterId" type="info" size="small">
+                Подчинён: {{ parentTagLabel(item) }}
+              </el-tag>
+              <el-tag
+                v-if="(item._count?.children ?? 0) > 0"
+                type="success"
+                size="small"
+              >
+                Групповой (подчинено счётчиков:
+                {{ item._count.children }})
+              </el-tag>
+            </div>
+            <div class="line">Серийный номер: {{ item.serialNumber }}</div>
+            <div class="line resource-line">
+              <span
+                class="resource-dot"
+                :style="{ background: resourceTypeColor(item.resourceType?.name || item.resourceTypeCode) }"
+              />
+              Ресурс:
+              <span
+                class="resource-name"
+                :style="{ color: resourceTypeColor(item.resourceType?.name || item.resourceTypeCode) }"
+              >
+                {{ item.resourceType?.name || item.resourceTypeCode || '—' }}
+              </span>
+              <template v-if="meterUnit(item)">
+                ({{ meterUnit(item) }})
+              </template>
+            </div>
+            <div
+              v-if="item.transformerRatio != null && item.transformerRatio !== ''"
+              class="line"
             >
-              → {{ item.consumer?.name || '—' }}
-            </el-link>
-            <span v-else>Без потребителя</span>
-          </div>
-          <div class="line">Тариф: {{ tariffLabel(item.tariffType) }}</div>
-          <div class="counts">
-            <el-link type="primary" @click="goToReadings(item.id)">
-              Показания ({{ item._count?.readings ?? 0 }})
-            </el-link>
-          </div>
+              Коэфф. трансформации:
+              {{ item.primaryCurrent }}/{{ item.secondaryCurrent }} =
+              {{ formatRatio(item.transformerRatio) }}
+            </div>
+            <div class="line">
+              Объект:
+              <el-link type="primary" @click="goToObject(item.objectId)">
+                → {{ item.object?.name || '—' }}
+              </el-link>
+            </div>
+            <div class="line">
+              Потребитель:
+              <el-link
+                v-if="item.consumerId"
+                type="primary"
+                @click="goToConsumer(item.consumerId)"
+              >
+                → {{ item.consumer?.name || '—' }}
+              </el-link>
+              <span v-else>Без потребителя</span>
+            </div>
+            <div class="line">Тариф: {{ tariffLabel(item.tariffType) }}</div>
+            <div class="counts">
+              <el-link type="primary" @click="goToReadings(item.id)">
+                Показания ({{ item._count?.readings ?? 0 }})
+              </el-link>
+            </div>
 
-          <template v-if="canManage" #actions>
-            <el-button
-              v-if="(item._count?.children ?? 0) > 0"
-              type="warning"
-              plain
-              @click="openMinusovka(item)"
-            >
-              Посчитать минусовку
-            </el-button>
-            <el-button type="primary" plain @click="openEdit(item)">
-              Редактировать
-            </el-button>
-            <el-popconfirm
-              :title="`Удалить счётчик ${item.name}?`"
-              confirm-button-text="Удалить"
-              cancel-button-text="Отмена"
-              @confirm="onDelete(item)"
-            >
-              <template #reference>
-                <el-button type="danger" plain>Удалить</el-button>
-              </template>
-            </el-popconfirm>
-            <el-popconfirm
-              v-if="canHardDelete(item)"
-              title="Это действие необратимо. Счётчик будет удалён без возможности восстановления. Продолжить?"
-              confirm-button-text="Да, удалить навсегда"
-              cancel-button-text="Отмена"
-              confirm-button-type="danger"
-              @confirm="onHardDelete(item)"
-            >
-              <template #reference>
-                <el-button type="danger">Удалить окончательно</el-button>
-              </template>
-            </el-popconfirm>
-          </template>
-        </EntityCard>
+            <template v-if="canManage" #actions>
+              <el-button type="primary" plain @click="openEdit(item)">
+                Редактировать
+              </el-button>
+              <el-popconfirm
+                :title="`Удалить счётчик ${item.name}?`"
+                confirm-button-text="Удалить"
+                cancel-button-text="Отмена"
+                @confirm="onDelete(item)"
+              >
+                <template #reference>
+                  <el-button type="danger" plain>Удалить</el-button>
+                </template>
+              </el-popconfirm>
+              <el-popconfirm
+                v-if="canHardDelete(item)"
+                title="Это действие необратимо. Счётчик будет удалён без возможности восстановления. Продолжить?"
+                confirm-button-text="Да, удалить навсегда"
+                cancel-button-text="Отмена"
+                confirm-button-type="danger"
+                @confirm="onHardDelete(item)"
+              >
+                <template #reference>
+                  <el-button type="danger">Удалить окончательно</el-button>
+                </template>
+              </el-popconfirm>
+            </template>
+          </EntityCard>
+        </div>
       </div>
 
       <div class="pager">
@@ -514,11 +594,6 @@ onMounted(async () => {
       v-model="dialogVisible"
       :meter="editingMeter"
       @saved="onSaved"
-    />
-
-    <MinusovkaDialog
-      v-model="minusovkaVisible"
-      :meter="minusovkaMeter"
     />
   </div>
 </template>
@@ -558,6 +633,37 @@ onMounted(async () => {
   justify-content: space-between;
   gap: 1rem;
   flex-wrap: wrap;
+}
+
+.resource-group {
+  margin-bottom: 1.25rem;
+}
+
+.resource-group-title {
+  margin: 0 0 0.75rem;
+  padding: 0.4rem 0.7rem 0.4rem 0.65rem;
+  font-size: 1.05rem;
+  font-weight: 600;
+  border-radius: 8px;
+  border-left: 4px solid;
+}
+
+.resource-line {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+
+.resource-dot {
+  width: 0.55rem;
+  height: 0.55rem;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.resource-name {
+  font-weight: 600;
 }
 
 .grid {

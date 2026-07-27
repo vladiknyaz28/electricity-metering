@@ -40,4 +40,24 @@ export class DashboardController {
       currentUser,
     );
   }
+
+  @Get('tariff-zone-breakdown')
+  @Roles('admin', 'object_manager', 'consumer', 'auditor')
+  getTariffZoneBreakdown(
+    @Query('periodStart') periodStart: string,
+    @Query('periodEnd') periodEnd: string,
+    @Query('objectId') objectId: string | undefined,
+    @Query('resourceTypeId') resourceTypeId: string | undefined,
+    @CurrentUser() currentUser: AuthUser,
+  ) {
+    return this.dashboardService.getTariffZoneBreakdown(
+      {
+        periodStart,
+        periodEnd,
+        objectId: objectId || undefined,
+        resourceTypeId: resourceTypeId || undefined,
+      },
+      currentUser,
+    );
+  }
 }

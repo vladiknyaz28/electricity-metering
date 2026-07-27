@@ -21,6 +21,7 @@ type CurrentUser = {
   id: string;
   role: string;
   consumerId?: string | null;
+  isSuperAdmin?: boolean;
 };
 
 type ZoneValues = {
@@ -149,6 +150,7 @@ export class ReadingsService {
         label: string;
         consumption: number;
         hasData: boolean;
+        resourceTypeId: string | null;
       }> | null = null;
 
       if (parentMeter) {
@@ -164,6 +166,7 @@ export class ReadingsService {
               label,
               consumption: 0,
               hasData: false,
+              resourceTypeId: child.resourceTypeId ?? null,
             });
             continue;
           }
@@ -181,6 +184,7 @@ export class ReadingsService {
             label,
             consumption: childResult.consumption,
             hasData: childResult.hasData,
+            resourceTypeId: child.resourceTypeId ?? null,
           });
 
           childrenConsumption += childResult.consumption;
@@ -203,15 +207,27 @@ export class ReadingsService {
           )
         : null;
 
-      const tariffRateT1 = tariff
+      const autoTariffRateT1 = tariff
         ? this.findZoneRate(tariff.zones, 'T1')
         : null;
-      const tariffRateT2 = tariff
+      const autoTariffRateT2 = tariff
         ? this.findZoneRate(tariff.zones, 'T2')
         : null;
-      const tariffRateT3 = tariff
+      const autoTariffRateT3 = tariff
         ? this.findZoneRate(tariff.zones, 'T3')
         : null;
+
+      const rateT1Override = this.decimalToNumber(reading.rateT1Override);
+      const rateT2Override = this.decimalToNumber(reading.rateT2Override);
+      const rateT3Override = this.decimalToNumber(reading.rateT3Override);
+
+      const tariffRateT1 = rateT1Override ?? autoTariffRateT1;
+      const tariffRateT2 = rateT2Override ?? autoTariffRateT2;
+      const tariffRateT3 = rateT3Override ?? autoTariffRateT3;
+
+      const isManualRateT1 = rateT1Override != null;
+      const isManualRateT2 = rateT2Override != null;
+      const isManualRateT3 = rateT3Override != null;
 
       // Режим учёта по физике строки: многотарифный, если есть расход T2 или T3
       const multiTariffPhysical =
@@ -255,7 +271,7 @@ export class ReadingsService {
               : this.round2(residualT3 * tariffRateT3);
         }
       } else if (hasPrevious) {
-        // Обычный счётчик: деньги = расход_зоны × ставка (независимо)
+        // Обычный счётчик: деньги = расход_зоны × эффективная ставка
         amountT1 =
           tariffRateT1 == null
             ? null
@@ -278,8 +294,15 @@ export class ReadingsService {
           ? this.round2(moneyParts.reduce((sum, value) => sum + value, 0))
           : null;
 
+      const {
+        rateT1Override: _o1,
+        rateT2Override: _o2,
+        rateT3Override: _o3,
+        ...readingRest
+      } = reading;
+
       enriched.push({
-        ...reading,
+        ...readingRest,
         transformerRatio: ratio,
         previousValueT1: hasPrevious ? previousPhys.T1 : 0,
         previousValueT2: hasPrevious ? previousPhys.T2 : 0,
@@ -301,9 +324,18 @@ export class ReadingsService {
         residualIncomplete,
         hasChildren: parentMeter,
         childrenBreakdown,
+        rateT1Override,
+        rateT2Override,
+        rateT3Override,
+        autoTariffRateT1,
+        autoTariffRateT2,
+        autoTariffRateT3,
         tariffRateT1,
         tariffRateT2,
         tariffRateT3,
+        isManualRateT1,
+        isManualRateT2,
+        isManualRateT3,
         amountT1,
         amountT2,
         amountT3,
@@ -312,6 +344,14 @@ export class ReadingsService {
     }
 
     return enriched.reverse();
+  }
+
+  private decimalToNumber(
+    value: Prisma.Decimal | number | null | undefined,
+  ): number | null {
+    if (value == null) return null;
+    const n = Number(value);
+    return Number.isFinite(n) ? n : null;
   }
 
   private resolveTransformerRatio(
@@ -344,6 +384,7 @@ export class ReadingsService {
 
   async update(id: string, dto: UpdateReadingDto, currentUser: CurrentUser) {
     this.assertCanMutate(currentUser);
+    this.assertCanSetRateOverrides(dto, currentUser);
 
     const existing = await this.getReadingOrThrow(id);
     const meter = await this.metersService.findOneScoped(
@@ -392,8 +433,32 @@ export class ReadingsService {
         currentValue: values.valueT1,
         previousValue: previous?.valueT1 ?? null,
         comment: dto.comment !== undefined ? dto.comment : undefined,
+        ...(dto.rateT1Override !== undefined
+          ? { rateT1Override: dto.rateT1Override }
+          : {}),
+        ...(dto.rateT2Override !== undefined
+          ? { rateT2Override: dto.rateT2Override }
+          : {}),
+        ...(dto.rateT3Override !== undefined
+          ? { rateT3Override: dto.rateT3Override }
+          : {}),
       },
     });
+  }
+
+  private assertCanSetRateOverrides(
+    dto: UpdateReadingDto,
+    currentUser: CurrentUser,
+  ) {
+    const touchesOverride =
+      dto.rateT1Override !== undefined ||
+      dto.rateT2Override !== undefined ||
+      dto.rateT3Override !== undefined;
+    if (!touchesOverride) return;
+    if (currentUser.isSuperAdmin === true) return;
+    throw new ForbiddenException(
+      'Ручное изменение тарифа доступно только главному администратору',
+    );
   }
 
   async remove(id: string, currentUser: CurrentUser, force = false) {

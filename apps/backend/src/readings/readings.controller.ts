@@ -21,6 +21,7 @@ type AuthUser = {
   id: string;
   role: string;
   consumerId?: string | null;
+  isSuperAdmin?: boolean;
 };
 
 @UseGuards(JwtAuthGuard, RolesGuard)

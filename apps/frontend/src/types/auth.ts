@@ -8,6 +8,7 @@ export interface AuthUser {
   role: UserRole | string
   status: string
   consumerId: string | null
+  isSuperAdmin?: boolean
   createdAt: string
   updatedAt: string
 }

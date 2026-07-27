@@ -11,6 +11,7 @@ export const useAuthStore = defineStore('auth', () => {
 
   const isAuthenticated = computed(() => Boolean(accessToken.value))
   const role = computed(() => user.value?.role ?? null)
+  const isSuperAdmin = computed(() => user.value?.isSuperAdmin === true)
 
   function clearSession() {
     accessToken.value = null
@@ -51,6 +52,7 @@ export const useAuthStore = defineStore('auth', () => {
     user,
     isAuthenticated,
     role,
+    isSuperAdmin,
     login,
     fetchProfile,
     logout,

@@ -32,6 +32,7 @@ const emit = defineEmits<{
 
 const authStore = useAuthStore()
 const canCreateResourceType = computed(() => authStore.role === 'admin')
+const isSuperAdmin = computed(() => authStore.isSuperAdmin)
 
 const formRef = ref<FormInstance>()
 const saving = ref(false)
@@ -93,6 +94,11 @@ const usesConsumerTariff = computed(
   () => !form.isMain && Boolean(form.consumerId),
 )
 
+/** Meter.tariffId может менять только isSuperAdmin */
+const tariffFieldDisabled = computed(
+  () => usesConsumerTariff.value || !isSuperAdmin.value,
+)
+
 const consumerTariffId = computed(() => {
   if (!form.consumerId) return null
   return (
@@ -125,7 +131,9 @@ const parentMeterOptions = computed(() =>
     (item) =>
       item.objectId === form.objectId &&
       item.id !== props.meter?.id &&
-      item.status === 'active',
+      item.status === 'active' &&
+      (!form.resourceTypeId ||
+        item.resourceTypeId === form.resourceTypeId),
   ),
 )
 
@@ -320,8 +328,6 @@ async function onSubmit() {
       resourceTypeId: form.resourceTypeId,
       meterCategoryCode: form.meterCategoryCode,
       tariffType: form.tariffType,
-      tariffId:
-        form.isMain || !form.consumerId ? form.tariffId || null : null,
       accuracyClass: form.accuracyClass.trim(),
       installationLocation: form.installationLocation.trim(),
       status: form.status,
@@ -333,6 +339,12 @@ async function onSubmit() {
       secondaryCurrent: form.hasCurrentTransformer
         ? Number(form.secondaryCurrent)
         : null,
+    }
+
+    // tariffId в payload — только для superAdmin (иначе 403 на backend)
+    if (isSuperAdmin.value) {
+      payload.tariffId =
+        form.isMain || !form.consumerId ? form.tariffId || null : null
     }
 
     const saved = isEdit.value
@@ -503,10 +515,10 @@ watch(
           filterable
           placeholder="Выберите тариф"
           style="width: 100%"
-          :disabled="usesConsumerTariff"
+          :disabled="tariffFieldDisabled"
           @update:model-value="
             (value: string | null) => {
-              if (!usesConsumerTariff) form.tariffId = value
+              if (!tariffFieldDisabled) form.tariffId = value
             }
           "
         >
@@ -520,6 +532,12 @@ watch(
         </el-select>
         <div v-if="usesConsumerTariff" class="unit-hint">
           Тариф берётся от потребителя
+        </div>
+        <div
+          v-else-if="!isSuperAdmin"
+          class="unit-hint"
+        >
+          Изменение доступно только главному администратору
         </div>
       </el-form-item>
       <el-form-item label="Тип ресурса" prop="resourceTypeId">

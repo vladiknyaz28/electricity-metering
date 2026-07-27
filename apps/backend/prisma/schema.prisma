@@ -15,6 +15,8 @@ model User {
   passwordHash String
   role         String // 'admin' | 'object_manager' | 'consumer' | 'auditor'
   status       String  @default("active")
+  /** Единственный, кто может менять Meter.tariffId (не через API/UI — только скрипт). */
+  isSuperAdmin Boolean @default(false)
 
   consumerId String?
   consumer   Consumer? @relation(fields: [consumerId], references: [id], onDelete: SetNull)
@@ -146,6 +148,12 @@ model MeterReading {
   valueT1 Float
   valueT2 Float?
   valueT3 Float?
+
+  /** Ручное переопределение ставки на конкретном показании (superAdmin). */
+  rateT1Override Decimal? @db.Decimal(10, 3)
+  rateT2Override Decimal? @db.Decimal(10, 3)
+  rateT3Override Decimal? @db.Decimal(10, 3)
+
   readingDate DateTime
   comment     String?
 

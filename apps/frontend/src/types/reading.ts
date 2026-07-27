@@ -34,6 +34,17 @@ export interface MeterReading {
   tariffRateT1: number | null
   tariffRateT2: number | null
   tariffRateT3: number | null
+  /** Авто-ставка из тарифа (без override) */
+  autoTariffRateT1?: number | null
+  autoTariffRateT2?: number | null
+  autoTariffRateT3?: number | null
+  /** Сохранённый ручной override */
+  rateT1Override?: number | null
+  rateT2Override?: number | null
+  rateT3Override?: number | null
+  isManualRateT1?: boolean
+  isManualRateT2?: boolean
+  isManualRateT3?: boolean
   amountT1: number | null
   amountT2: number | null
   amountT3: number | null
@@ -45,6 +56,7 @@ export interface ReadingChildBreakdown {
   label: string
   consumption: number
   hasData: boolean
+  resourceTypeId?: string | null
 }
 
 export interface CreateReadingPayload {
@@ -58,7 +70,11 @@ export interface CreateReadingPayload {
 
 export type UpdateReadingPayload = Partial<
   Omit<CreateReadingPayload, 'meterId'>
->
+> & {
+  rateT1Override?: number | null
+  rateT2Override?: number | null
+  rateT3Override?: number | null
+}
 
 export interface MinusovkaBreakdownItem {
   meterId: string

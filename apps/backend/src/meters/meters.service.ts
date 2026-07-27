@@ -82,7 +82,6 @@ export class MetersService {
     }
 
     const parentMeterId = isMain ? null : (dto.parentMeterId ?? null);
-    await this.validateParentMeter(parentMeterId, dto.objectId, null);
 
     // Тариф счётчика — только без потребителя; иначе берётся тариф потребителя
     const tariffId = consumerId ? null : (dto.tariffId ?? null);
@@ -94,6 +93,12 @@ export class MetersService {
     );
 
     const resourceType = await this.getResourceTypeOrThrow(dto.resourceTypeId);
+    await this.validateParentMeter(
+      parentMeterId,
+      dto.objectId,
+      null,
+      resourceType.id,
+    );
 
     try {
       return await this.prisma.$transaction(async (tx) => {
@@ -207,8 +212,25 @@ export class MetersService {
       parentMeterId = dtoParentMeterId;
     }
 
-    if (parentMeterId !== undefined) {
-      await this.validateParentMeter(parentMeterId, targetObjectId, id);
+    const targetResourceTypeId =
+      resourceTypeId !== undefined
+        ? resourceTypeId
+        : existing.resourceTypeId;
+
+    const parentToValidate =
+      parentMeterId !== undefined
+        ? parentMeterId
+        : resourceTypeId !== undefined
+          ? existing.parentMeterId
+          : undefined;
+
+    if (parentToValidate !== undefined) {
+      await this.validateParentMeter(
+        parentToValidate,
+        targetObjectId,
+        id,
+        targetResourceTypeId,
+      );
     }
 
     let tariffId: string | null | undefined = undefined;
@@ -409,23 +431,29 @@ export class MetersService {
 
   /**
    * Счётчики, вычитаемые из минусовки данного родителя.
-   * Главный (isMain): все счётчики объекта с parentMeterId = этот id
-   * ИЛИ parentMeterId IS NULL (питаются от главного по умолчанию),
-   * кроме самого главного. Счётчики под промежуточным родителем —
-   * не включаются (учитываются у своего родителя).
-   * Не главный: только явные дети (parentMeterId = этот id).
+   * Главный (isMain): все счётчики объекта ТОГО ЖЕ resourceTypeId с
+   * parentMeterId = этот id ИЛИ parentMeterId IS NULL (питаются от
+   * главного по умолчанию), кроме самого главного.
+   * Счётчики другого типа ресурса НИКОГДА не включаются.
+   * Не главный: только явные дети (parentMeterId = этот id) того же ресурса.
    */
   async findMinusovkaChildren(meter: {
     id: string;
     objectId: string;
     isMain: boolean;
+    resourceTypeId: string | null;
   }) {
+    const sameResource: { resourceTypeId: string | null } = {
+      resourceTypeId: meter.resourceTypeId ?? null,
+    };
+
     if (meter.isMain) {
       return this.prisma.meter.findMany({
         where: {
           objectId: meter.objectId,
           id: { not: meter.id },
           isMain: false,
+          ...sameResource,
           OR: [{ parentMeterId: meter.id }, { parentMeterId: null }],
         },
         select: {
@@ -433,6 +461,7 @@ export class MetersService {
           name: true,
           serialNumber: true,
           parentMeterId: true,
+          resourceTypeId: true,
           consumer: {
             select: { id: true, name: true },
           },
@@ -442,12 +471,16 @@ export class MetersService {
     }
 
     return this.prisma.meter.findMany({
-      where: { parentMeterId: meter.id },
+      where: {
+        parentMeterId: meter.id,
+        ...sameResource,
+      },
       select: {
         id: true,
         name: true,
         serialNumber: true,
         parentMeterId: true,
+        resourceTypeId: true,
         consumer: {
           select: { id: true, name: true },
         },
@@ -618,6 +651,7 @@ export class MetersService {
     parentMeterId: string | null,
     objectId: string,
     selfId: string | null,
+    childResourceTypeId: string | null | undefined,
   ) {
     if (!parentMeterId) {
       return;
@@ -631,7 +665,12 @@ export class MetersService {
 
     const parent = await this.prisma.meter.findUnique({
       where: { id: parentMeterId },
-      select: { id: true, objectId: true, parentMeterId: true },
+      select: {
+        id: true,
+        objectId: true,
+        parentMeterId: true,
+        resourceTypeId: true,
+      },
     });
 
     if (!parent) {
@@ -641,6 +680,15 @@ export class MetersService {
     if (parent.objectId !== objectId) {
       throw new BadRequestException(
         'Родительский счётчик должен принадлежать тому же объекту',
+      );
+    }
+
+    if (
+      childResourceTypeId !== undefined &&
+      (parent.resourceTypeId ?? null) !== (childResourceTypeId ?? null)
+    ) {
+      throw new BadRequestException(
+        'Счётчик может быть подчинён только счётчику того же типа ресурса',
       );
     }
 

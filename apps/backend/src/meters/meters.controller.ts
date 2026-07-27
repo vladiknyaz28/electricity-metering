@@ -2,6 +2,7 @@ import {
   Body,
   Controller,
   Delete,
+  ForbiddenException,
   Get,
   Param,
   Patch,
@@ -21,6 +22,7 @@ type AuthUser = {
   id: string;
   role: string;
   consumerId?: string | null;
+  isSuperAdmin?: boolean;
 };
 
 @UseGuards(JwtAuthGuard, RolesGuard)
@@ -31,6 +33,7 @@ export class MetersController {
   @Post()
   @Roles('admin', 'object_manager')
   create(@Body() dto: CreateMeterDto, @CurrentUser() currentUser: AuthUser) {
+    this.assertCanSetMeterTariff(dto, currentUser);
     return this.metersService.create(dto, currentUser);
   }
 
@@ -69,6 +72,7 @@ export class MetersController {
     @Body() dto: UpdateMeterDto,
     @CurrentUser() currentUser: AuthUser,
   ) {
+    this.assertCanSetMeterTariff(dto, currentUser);
     return this.metersService.update(id, dto, currentUser);
   }
 
@@ -85,5 +89,21 @@ export class MetersController {
   @Roles('admin', 'object_manager')
   remove(@Param('id') id: string, @CurrentUser() currentUser: AuthUser) {
     return this.metersService.remove(id, currentUser);
+  }
+
+  /** Meter.tariffId — только isSuperAdmin (роль admin/manager не достаточна). */
+  private assertCanSetMeterTariff(
+    dto: { tariffId?: string | null },
+    currentUser: AuthUser,
+  ) {
+    if (dto.tariffId === undefined) {
+      return;
+    }
+    if (currentUser.isSuperAdmin === true) {
+      return;
+    }
+    throw new ForbiddenException(
+      'Изменение тарифа счётчика доступно только главному администратору',
+    );
   }
 }

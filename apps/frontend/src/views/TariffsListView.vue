@@ -14,6 +14,7 @@ import { getResourceTypes } from '../api/resourceTypes'
 import type { TariffFamily, TariffHistory, TariffVersion } from '../types/tariff'
 import type { ResourceType } from '../types/resourceType'
 import EntityCard from '../components/EntityCard.vue'
+import { resourceTypeColor, resourceTypeSoftBg } from '../utils/resourceColors'
 
 const authStore = useAuthStore()
 const canManage = computed(() => authStore.role === 'admin')
@@ -266,7 +267,15 @@ onMounted(loadData)
         :status-type="item.status === 'active' ? 'success' : 'info'"
       >
         <div class="tags">
-          <el-tag size="small" type="warning">
+          <el-tag
+            size="small"
+            effect="plain"
+            :style="{
+              color: resourceTypeColor(item.resourceType?.name),
+              background: resourceTypeSoftBg(item.resourceType?.name),
+              borderColor: resourceTypeColor(item.resourceType?.name),
+            }"
+          >
             {{ item.resourceType?.name || 'Ресурс' }}
           </el-tag>
         </div>
