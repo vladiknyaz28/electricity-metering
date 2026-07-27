@@ -88,18 +88,7 @@ export class ReadingsService {
     const meter = await this.metersService.findOneScoped(meterId, currentUser);
     const ratio = this.resolveTransformerRatio(meter.transformerRatio);
 
-    const children = await this.prisma.meter.findMany({
-      where: { parentMeterId: meterId },
-      select: {
-        id: true,
-        name: true,
-        serialNumber: true,
-        consumer: {
-          select: { id: true, name: true },
-        },
-      },
-      orderBy: { name: 'asc' },
-    });
+    const children = await this.metersService.findMinusovkaChildren(meter);
     const parentMeter = children.length > 0;
 
     const childLabel = (child: (typeof children)[number]) => {
@@ -117,15 +106,8 @@ export class ReadingsService {
       orderBy: { readingDate: 'asc' },
     });
 
-    let tariffFamilyId: string | null = null;
-
-    if (meter.consumerId) {
-      const consumer = await this.prisma.consumer.findUnique({
-        where: { id: meter.consumerId },
-        select: { tariffId: true },
-      });
-      tariffFamilyId = consumer?.tariffId ?? null;
-    }
+    const tariffFamilyId =
+      await this.metersService.resolveMeterTariffFamilyId(meter);
 
     const enriched: Array<Record<string, unknown>> = [];
 

@@ -106,6 +106,10 @@ model Meter {
   parentMeter   Meter?  @relation("MeterHierarchy", fields: [parentMeterId], references: [id], onDelete: SetNull)
   children      Meter[] @relation("MeterHierarchy")
 
+  /// familyId серии тарифов (как Consumer.tariffId). Используется, если у счётчика нет потребителя.
+  tariffId String?
+  // Связь не через Prisma FK: резолв версии по дате — TariffsService.resolveActiveTariffVersion
+
   readings MeterReading[]
   charges  Charge[]
 

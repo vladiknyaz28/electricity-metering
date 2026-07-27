@@ -84,6 +84,9 @@ export class MetersService {
     const parentMeterId = isMain ? null : (dto.parentMeterId ?? null);
     await this.validateParentMeter(parentMeterId, dto.objectId, null);
 
+    // Тариф счётчика — только без потребителя; иначе берётся тариф потребителя
+    const tariffId = consumerId ? null : (dto.tariffId ?? null);
+
     const transformer = this.resolveTransformerFields(
       dto.hasCurrentTransformer ?? false,
       dto.primaryCurrent,
@@ -113,6 +116,7 @@ export class MetersService {
             resourceTypeId: resourceType.id,
             meterCategoryCode: dto.meterCategoryCode,
             tariffType: dto.tariffType,
+            tariffId,
             unit: resourceType.unit,
             accuracyClass: dto.accuracyClass,
             status: dto.status ?? 'active',
@@ -192,6 +196,7 @@ export class MetersService {
       resourceTypeCode: _legacyCode,
       unit: _legacyUnit,
       parentMeterId: dtoParentMeterId,
+      tariffId: dtoTariffId,
       ...rest
     } = dto;
 
@@ -206,6 +211,14 @@ export class MetersService {
       await this.validateParentMeter(parentMeterId, targetObjectId, id);
     }
 
+    let tariffId: string | null | undefined = undefined;
+    if (targetConsumerId) {
+      // При наличии потребителя тариф счётчика не используется
+      tariffId = null;
+    } else if (dtoTariffId !== undefined) {
+      tariffId = dtoTariffId;
+    }
+
     const data: Prisma.MeterUncheckedUpdateInput = {
       ...rest,
       objectId: dtoObjectId,
@@ -216,6 +229,7 @@ export class MetersService {
           ? targetConsumerId
           : undefined,
       parentMeterId,
+      tariffId,
       verificationDueDate:
         verificationDueDate !== undefined
           ? verificationDueDate
@@ -306,15 +320,6 @@ export class MetersService {
 
     const meter = await this.prisma.meter.findUnique({
       where: { id: meterId },
-      include: {
-        children: {
-          include: {
-            consumer: {
-              select: { id: true, name: true },
-            },
-          },
-        },
-      },
     });
 
     if (!meter) {
@@ -323,7 +328,9 @@ export class MetersService {
 
     await this.assertMeterAccess(meter, currentUser, 'Доступ запрещён');
 
-    if (meter.children.length === 0) {
+    const children = await this.findMinusovkaChildren(meter);
+
+    if (children.length === 0) {
       throw new BadRequestException(
         'У этого счётчика нет подчинённых счётчиков, минусовку считать не с чем',
       );
@@ -345,7 +352,7 @@ export class MetersService {
     }> = [];
 
     let childrenConsumption = 0;
-    for (const child of meter.children) {
+    for (const child of children) {
       const childResult = await this.calculateMeterConsumption(
         child.id,
         start,
@@ -367,7 +374,7 @@ export class MetersService {
       `[minusovka] meter=${meterId} period=${periodStart}..${periodEnd} ` +
         `parent=${parentConsumption} (hasData=${parentResult.hasData}) ` +
         `children=${childrenConsumption} minusovka=${minusovka} ` +
-        `kids=${meter.children.length}`,
+        `kids=${children.length} isMain=${meter.isMain}`,
     );
 
     return {
@@ -379,6 +386,74 @@ export class MetersService {
       isAnomaly: minusovka < 0,
       breakdown,
     };
+  }
+
+  /**
+   * familyId тарифа для расчёта Тариф/Сумма:
+   * — есть потребитель → consumer.tariffId
+   * — нет потребителя (главный/групповой) → meter.tariffId
+   */
+  async resolveMeterTariffFamilyId(meter: {
+    consumerId: string | null;
+    tariffId?: string | null;
+  }): Promise<string | null> {
+    if (meter.consumerId) {
+      const consumer = await this.prisma.consumer.findUnique({
+        where: { id: meter.consumerId },
+        select: { tariffId: true },
+      });
+      return consumer?.tariffId ?? null;
+    }
+    return meter.tariffId ?? null;
+  }
+
+  /**
+   * Счётчики, вычитаемые из минусовки данного родителя.
+   * Главный (isMain): все счётчики объекта с parentMeterId = этот id
+   * ИЛИ parentMeterId IS NULL (питаются от главного по умолчанию),
+   * кроме самого главного. Счётчики под промежуточным родителем —
+   * не включаются (учитываются у своего родителя).
+   * Не главный: только явные дети (parentMeterId = этот id).
+   */
+  async findMinusovkaChildren(meter: {
+    id: string;
+    objectId: string;
+    isMain: boolean;
+  }) {
+    if (meter.isMain) {
+      return this.prisma.meter.findMany({
+        where: {
+          objectId: meter.objectId,
+          id: { not: meter.id },
+          isMain: false,
+          OR: [{ parentMeterId: meter.id }, { parentMeterId: null }],
+        },
+        select: {
+          id: true,
+          name: true,
+          serialNumber: true,
+          parentMeterId: true,
+          consumer: {
+            select: { id: true, name: true },
+          },
+        },
+        orderBy: { name: 'asc' },
+      });
+    }
+
+    return this.prisma.meter.findMany({
+      where: { parentMeterId: meter.id },
+      select: {
+        id: true,
+        name: true,
+        serialNumber: true,
+        parentMeterId: true,
+        consumer: {
+          select: { id: true, name: true },
+        },
+      },
+      orderBy: { name: 'asc' },
+    });
   }
 
   /**

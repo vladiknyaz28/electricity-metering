@@ -11,10 +11,12 @@ import {
   createResourceType,
   getResourceTypes,
 } from '../api/resourceTypes'
+import { getTariffFamilies } from '../api/tariffs'
 import type { EnergyObject } from '../types/object'
 import type { Consumer } from '../types/consumer'
 import type { CreateMeterPayload, Meter } from '../types/meter'
 import type { ResourceType } from '../types/resourceType'
+import type { TariffFamily } from '../types/tariff'
 
 const CREATE_OPTION = '__create__'
 
@@ -37,6 +39,7 @@ const objects = ref<EnergyObject[]>([])
 const consumers = ref<Consumer[]>([])
 const meters = ref<Meter[]>([])
 const resourceTypes = ref<ResourceType[]>([])
+const tariffFamilies = ref<TariffFamily[]>([])
 
 const createTypeVisible = ref(false)
 const creatingType = ref(false)
@@ -57,6 +60,7 @@ const form = reactive<{
   resourceTypeId: string
   meterCategoryCode: string
   tariffType: string
+  tariffId: string | null
   accuracyClass: string
   installationLocation: string
   status: string
@@ -74,6 +78,7 @@ const form = reactive<{
   resourceTypeId: '',
   meterCategoryCode: 'residential',
   tariffType: 'single',
+  tariffId: null,
   accuracyClass: '1.0',
   installationLocation: '',
   status: 'active',
@@ -82,6 +87,34 @@ const form = reactive<{
   primaryCurrent: undefined,
   secondaryCurrent: 5,
 })
+
+/** Тариф берётся от потребителя — поле счётчика не редактируется */
+const usesConsumerTariff = computed(
+  () => !form.isMain && Boolean(form.consumerId),
+)
+
+const consumerTariffId = computed(() => {
+  if (!form.consumerId) return null
+  return (
+    consumers.value.find((item) => item.id === form.consumerId)?.tariffId ??
+    null
+  )
+})
+
+const displayedTariffId = computed(() =>
+  usesConsumerTariff.value ? consumerTariffId.value : form.tariffId,
+)
+
+const activeTariffs = computed(() =>
+  tariffFamilies.value.filter((item) => item.status === 'active'),
+)
+
+function tariffLabel(family: TariffFamily) {
+  const unit = family.resourceType?.unit
+    ? ` · ${family.resourceType.unit}`
+    : ''
+  return `${family.name}${unit}`
+}
 
 const objectConsumers = computed(() =>
   consumers.value.filter((item) => item.objectId === form.objectId),
@@ -189,6 +222,7 @@ function resetForm() {
     props.meter?.resourceTypeId ?? props.meter?.resourceType?.id ?? ''
   form.meterCategoryCode = props.meter?.meterCategoryCode ?? 'residential'
   form.tariffType = props.meter?.tariffType ?? 'single'
+  form.tariffId = props.meter?.tariffId ?? null
   form.accuracyClass = props.meter?.accuracyClass ?? '1.0'
   form.installationLocation = props.meter?.installationLocation ?? ''
   form.status = props.meter?.status ?? 'active'
@@ -200,17 +234,19 @@ function resetForm() {
 
 async function loadOptions() {
   try {
-    const [objectsData, consumersData, metersData, typesData] =
+    const [objectsData, consumersData, metersData, typesData, tariffsData] =
       await Promise.all([
         getObjects(),
         getConsumers().catch(() => [] as Consumer[]),
         getMeters().catch(() => [] as Meter[]),
         getResourceTypes(),
+        getTariffFamilies().catch(() => [] as TariffFamily[]),
       ])
     objects.value = objectsData
     consumers.value = consumersData
     meters.value = metersData
     resourceTypes.value = typesData
+    tariffFamilies.value = tariffsData
 
     if (!form.resourceTypeId) {
       const electricity = typesData.find(
@@ -223,6 +259,7 @@ async function loadOptions() {
     consumers.value = []
     meters.value = []
     resourceTypes.value = []
+    tariffFamilies.value = []
   }
 }
 
@@ -283,6 +320,8 @@ async function onSubmit() {
       resourceTypeId: form.resourceTypeId,
       meterCategoryCode: form.meterCategoryCode,
       tariffType: form.tariffType,
+      tariffId:
+        form.isMain || !form.consumerId ? form.tariffId || null : null,
       accuracyClass: form.accuracyClass.trim(),
       installationLocation: form.installationLocation.trim(),
       status: form.status,
@@ -457,6 +496,32 @@ watch(
           </el-select>
         </el-form-item>
       </div>
+      <el-form-item label="Тариф">
+        <el-select
+          :model-value="displayedTariffId"
+          clearable
+          filterable
+          placeholder="Выберите тариф"
+          style="width: 100%"
+          :disabled="usesConsumerTariff"
+          @update:model-value="
+            (value: string | null) => {
+              if (!usesConsumerTariff) form.tariffId = value
+            }
+          "
+        >
+          <el-option :value="null" label="Без тарифа" />
+          <el-option
+            v-for="tariff in activeTariffs"
+            :key="tariff.familyId"
+            :label="tariffLabel(tariff)"
+            :value="tariff.familyId"
+          />
+        </el-select>
+        <div v-if="usesConsumerTariff" class="unit-hint">
+          Тариф берётся от потребителя
+        </div>
+      </el-form-item>
       <el-form-item label="Тип ресурса" prop="resourceTypeId">
         <el-select
           v-model="form.resourceTypeId"

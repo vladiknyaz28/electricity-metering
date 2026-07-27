@@ -67,8 +67,13 @@ const showT3 = computed(
     meter.value?.tariffType === 'triple',
 )
 
+/** Остаток/разбивка: явные дети ИЛИ (для главного) неприкреплённые счётчики объекта. */
 const showResidual = computed(
-  () => (meter.value?._count?.children ?? 0) > 0,
+  () =>
+    readings.value.some(
+      (row) =>
+        row.hasChildren === true || (row.childrenBreakdown?.length ?? 0) > 0,
+    ) || (meter.value?._count?.children ?? 0) > 0,
 )
 
 /** Колонки остатка по зонам — если backend отдал хотя бы одну (тарифицируемых зон ≥ 2). */

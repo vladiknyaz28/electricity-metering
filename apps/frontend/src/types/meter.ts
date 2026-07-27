@@ -36,6 +36,8 @@ export interface Meter {
   resourceType: MeterResourceTypeRef | null
   meterCategoryCode: string
   tariffType: string
+  /** familyId тарифа; для счётчиков без потребителя */
+  tariffId: string | null
   unit: string
   accuracyClass: string
   status: string
@@ -63,6 +65,7 @@ export interface CreateMeterPayload {
   resourceTypeId: string
   meterCategoryCode: string
   tariffType: string
+  tariffId?: string | null
   accuracyClass: string
   status?: string
   verificationDueDate?: string | null

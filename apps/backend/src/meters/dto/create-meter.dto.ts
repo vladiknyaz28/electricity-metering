@@ -46,6 +46,12 @@ export class CreateMeterDto {
   @IsString()
   tariffType: string;
 
+  /** familyId тарифа; актуален для счётчиков без потребителя (главный/групповой) */
+  @IsOptional()
+  @ValidateIf((_, value) => value !== null && value !== undefined)
+  @IsString()
+  tariffId?: string | null;
+
   /** @deprecated берётся из ResourceType.unit */
   @IsOptional()
   @IsString()
