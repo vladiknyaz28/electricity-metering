@@ -10,7 +10,6 @@ import type { EnergyObject } from '../types/object'
 import ObjectFormDialog from '../components/ObjectFormDialog.vue'
 import EntityCard from '../components/EntityCard.vue'
 import ManagersDrawer from '../components/ManagersDrawer.vue'
-import MinusovkaDialog from '../components/MinusovkaDialog.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -30,8 +29,21 @@ const highlightedId = ref<string | null>(null)
 const dialogVisible = ref(false)
 const editingObject = ref<EnergyObject | null>(null)
 const managersDrawerVisible = ref(false)
-const minusovkaVisible = ref(false)
-const minusovkaObject = ref<EnergyObject | null>(null)
+
+const typeCodeLabels: Record<string, string> = {
+  residential: 'Жилой (МКД, частный дом)',
+  commercial: 'Коммерческий (офисы, магазины)',
+  industrial: 'Промышленный',
+  mixed: 'Смешанный',
+  Жилой: 'Жилой (МКД, частный дом)',
+  Офисный: 'Коммерческий (офисы, магазины)',
+  Промышленный: 'Промышленный',
+  Складской: 'Коммерческий (офисы, магазины)',
+}
+
+function typeLabel(typeCode: string) {
+  return typeCodeLabels[typeCode] || typeCode
+}
 
 const filteredObjects = computed(() => {
   const query = search.value.trim().toLowerCase()
@@ -74,11 +86,6 @@ function openCreate() {
 function openEdit(object: EnergyObject) {
   editingObject.value = object
   dialogVisible.value = true
-}
-
-function openMinusovka(object: EnergyObject) {
-  minusovkaObject.value = object
-  minusovkaVisible.value = true
 }
 
 function onSaved(saved: EnergyObject) {
@@ -250,7 +257,7 @@ onMounted(async () => {
           :status-type="item.status === 'active' ? 'success' : 'info'"
           :highlighted="highlightedId === item.id"
         >
-          <div class="meta">{{ item.typeCode }} · {{ item.categoryCode }}</div>
+          <div class="meta">{{ typeLabel(item.typeCode) }} · {{ item.categoryCode }}</div>
           <div class="address">{{ item.address }}</div>
           <div class="line">
             Менеджер: {{ item.manager?.fullName ?? 'Не назначен' }}
@@ -267,14 +274,6 @@ onMounted(async () => {
           </div>
 
           <template v-if="canManage" #actions>
-            <el-button
-              v-if="(item._count?.meters ?? 0) > 0"
-              type="warning"
-              plain
-              @click="openMinusovka(item)"
-            >
-              Минусовка
-            </el-button>
             <el-button type="primary" plain @click="openEdit(item)">
               Редактировать
             </el-button>
@@ -319,10 +318,6 @@ onMounted(async () => {
       v-model="dialogVisible"
       :object="editingObject"
       @saved="onSaved"
-    />
-    <MinusovkaDialog
-      v-model="minusovkaVisible"
-      :object="minusovkaObject"
     />
     <ManagersDrawer
       v-model="managersDrawerVisible"

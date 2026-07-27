@@ -1,18 +1,16 @@
 import api from './client'
-import type {
-  Consumer,
-  CreateConsumerPayload,
-  TariffOption,
-} from '../types/consumer'
+import type { Consumer, CreateConsumerPayload } from '../types/consumer'
+import type { TariffFamily } from '../types/tariff'
+import { getTariffFamilies } from './tariffs'
 
 export async function getConsumers(): Promise<Consumer[]> {
   const { data } = await api.get<Consumer[]>('/consumers')
   return data
 }
 
-export async function getTariffs(): Promise<TariffOption[]> {
-  const { data } = await api.get<TariffOption[]>('/tariffs')
-  return data
+/** @deprecated используйте getTariffFamilies */
+export async function getTariffs(): Promise<TariffFamily[]> {
+  return getTariffFamilies()
 }
 
 export async function createConsumer(

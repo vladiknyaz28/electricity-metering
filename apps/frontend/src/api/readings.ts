@@ -1,8 +1,9 @@
 import api from './client'
 import type {
   CreateReadingPayload,
+  MeterMinusovkaResult,
   MeterReading,
-  MinusovkaResult,
+  ObjectMinusovkaResult,
   UpdateReadingPayload,
 } from '../types/reading'
 
@@ -28,8 +29,13 @@ export async function updateReading(
   return data
 }
 
-export async function deleteReading(id: string): Promise<MeterReading> {
-  const { data } = await api.delete<MeterReading>(`/readings/${id}`)
+export async function deleteReading(
+  id: string,
+  force = false,
+): Promise<MeterReading> {
+  const { data } = await api.delete<MeterReading>(`/readings/${id}`, {
+    params: force ? { force: true } : undefined,
+  })
   return data
 }
 
@@ -37,9 +43,23 @@ export async function getMinusovka(
   objectId: string,
   periodStart: string,
   periodEnd: string,
-): Promise<MinusovkaResult> {
-  const { data } = await api.get<MinusovkaResult>(
+): Promise<ObjectMinusovkaResult> {
+  const { data } = await api.get<ObjectMinusovkaResult>(
     `/objects/${objectId}/minusovka`,
+    {
+      params: { periodStart, periodEnd },
+    },
+  )
+  return data
+}
+
+export async function getMeterMinusovka(
+  meterId: string,
+  periodStart: string,
+  periodEnd: string,
+): Promise<MeterMinusovkaResult> {
+  const { data } = await api.get<MeterMinusovkaResult>(
+    `/meters/${meterId}/minusovka`,
     {
       params: { periodStart, periodEnd },
     },

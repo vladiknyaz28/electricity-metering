@@ -6,6 +6,7 @@ import {
   Param,
   Patch,
   Post,
+  Query,
   UseGuards,
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
@@ -37,6 +38,22 @@ export class MetersController {
   @Roles('admin', 'object_manager', 'consumer')
   findAll(@CurrentUser() currentUser: AuthUser) {
     return this.metersService.findAllScoped(currentUser);
+  }
+
+  @Get(':id/minusovka')
+  @Roles('admin', 'object_manager')
+  getMinusovka(
+    @Param('id') id: string,
+    @Query('periodStart') periodStart: string,
+    @Query('periodEnd') periodEnd: string,
+    @CurrentUser() currentUser: AuthUser,
+  ) {
+    return this.metersService.getMinusovka(
+      id,
+      periodStart,
+      periodEnd,
+      currentUser,
+    );
   }
 
   @Get(':id')

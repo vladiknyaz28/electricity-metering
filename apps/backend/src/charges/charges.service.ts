@@ -6,6 +6,7 @@ import {
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { MetersService } from '../meters/meters.service';
+import { TariffsService } from '../tariffs/tariffs.service';
 import { CreateChargeDto } from './dto/create-charge.dto';
 
 type CurrentUser = {
@@ -41,6 +42,7 @@ export class ChargesService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly metersService: MetersService,
+    private readonly tariffsService: TariffsService,
   ) {}
 
   async calculate(dto: CreateChargeDto, currentUser: CurrentUser) {
@@ -63,19 +65,18 @@ export class ChargesService {
       throw new BadRequestException('Потребителю не назначен тариф');
     }
 
-    const tariff = await this.prisma.tariff.findUnique({
-      where: { id: consumer.tariffId },
-      include: { zones: true },
-    });
-    if (!tariff) {
-      throw new NotFoundException('Тариф не найден');
-    }
-    if (tariff.status !== 'active') {
-      throw new BadRequestException('Тариф неактивен');
-    }
-
     const periodStart = new Date(dto.periodStart);
     const periodEnd = new Date(dto.periodEnd);
+
+    const tariff = await this.tariffsService.resolveActiveTariffVersion(
+      consumer.tariffId,
+      periodEnd,
+    );
+    if (!tariff) {
+      throw new NotFoundException(
+        'Не найдена версия тарифа, действующая на дату периода',
+      );
+    }
 
     const startReading = await this.prisma.meterReading.findFirst({
       where: {
@@ -260,7 +261,7 @@ export class ChargesService {
   }
 
   private getZoneRate(
-    zones: { zoneCode: string; rate: number }[],
+    zones: { zoneCode: string; rate: number | string | { toString(): string } }[],
     zoneCode: string,
     required: boolean,
   ): number {
@@ -273,7 +274,8 @@ export class ChargesService {
       }
       return 0;
     }
-    return zone.rate;
+    const rate = Number(zone.rate);
+    return Number.isFinite(rate) ? rate : 0;
   }
 
   private round2(value: number): number {

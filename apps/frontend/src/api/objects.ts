@@ -9,7 +9,7 @@ export async function getObjects(): Promise<EnergyObject[]> {
 }
 
 export async function getManagers(): Promise<AuthUser[]> {
-  return getUsers('object_manager')
+  return getUsers({ role: 'object_manager' })
 }
 
 export async function createObject(

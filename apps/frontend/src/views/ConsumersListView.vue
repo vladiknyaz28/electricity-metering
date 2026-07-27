@@ -12,7 +12,7 @@ import {
   hardDeleteConsumer,
 } from '../api/consumers'
 import type { EnergyObject } from '../types/object'
-import type { Consumer } from '../types/consumer'
+import type { Consumer, ConsumerMeterRef } from '../types/consumer'
 import ConsumerFormDialog from '../components/ConsumerFormDialog.vue'
 import EntityCard from '../components/EntityCard.vue'
 
@@ -192,6 +192,11 @@ function goToObject(objectId: string) {
   router.push({ path: '/objects', query: { highlightId: objectId } })
 }
 
+function parentMeterLabel(meter: ConsumerMeterRef) {
+  if (!meter.parentMeter) return meter.parentMeterId || '—'
+  return meter.parentMeter.name || meter.parentMeter.serialNumber
+}
+
 async function applyHighlight() {
   const highlightId =
     typeof route.query.highlightId === 'string' ? route.query.highlightId : null
@@ -339,9 +344,28 @@ onMounted(async () => {
 
           <div class="counts">
             <el-link type="primary" @click="goToMeters(item.id)">
-              Счётчики: {{ item._count?.meters ?? 0 }}
+              Счётчики: {{ item._count?.meters ?? item.meters?.length ?? 0 }}
             </el-link>
             <span>Пользователи: {{ item._count?.users ?? 0 }}</span>
+          </div>
+
+          <div v-if="item.meters?.length" class="meter-list">
+            <div
+              v-for="meter in item.meters"
+              :key="meter.id"
+              class="meter-row"
+            >
+              <span class="meter-name">
+                {{ meter.name }} · {{ meter.serialNumber }}
+              </span>
+              <el-tag
+                v-if="meter.parentMeterId"
+                type="info"
+                size="small"
+              >
+                Подчинён: {{ parentMeterLabel(meter) }}
+              </el-tag>
+            </div>
           </div>
 
           <template v-if="canManage" #actions>
@@ -389,6 +413,7 @@ onMounted(async () => {
       v-model="dialogVisible"
       :consumer="editingConsumer"
       @saved="onSaved"
+      @users-changed="loadData"
     />
   </div>
 </template>
@@ -435,6 +460,29 @@ onMounted(async () => {
   grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
   gap: 1rem;
   align-items: stretch;
+}
+
+.meter-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  margin-top: 0.65rem;
+}
+
+.meter-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem 0.6rem;
+  font-size: 13.5px;
+  color: #4b5563;
+}
+
+.meter-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .pager {

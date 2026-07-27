@@ -8,14 +8,32 @@ export interface MeterConsumerRef {
   name: string
 }
 
+export interface MeterResourceTypeRef {
+  id: string
+  name: string
+  unit: string
+  isSystem: boolean
+  status: string
+}
+
+export interface MeterParentRef {
+  id: string
+  name: string
+  serialNumber: string
+}
+
 export interface Meter {
   id: string
   objectId: string
   consumerId: string | null
+  parentMeterId: string | null
+  parentMeter: MeterParentRef | null
   ownerType: string
   name: string
   serialNumber: string
   resourceTypeCode: string
+  resourceTypeId: string | null
+  resourceType: MeterResourceTypeRef | null
   meterCategoryCode: string
   tariffType: string
   unit: string
@@ -30,7 +48,7 @@ export interface Meter {
   transformerRatio: number | string | null
   object: MeterObjectRef
   consumer: MeterConsumerRef | null
-  _count: { readings: number }
+  _count: { readings: number; children: number }
   createdAt: string
   updatedAt: string
 }
@@ -38,13 +56,13 @@ export interface Meter {
 export interface CreateMeterPayload {
   objectId: string
   consumerId?: string | null
+  parentMeterId?: string | null
   ownerType: string
   name: string
   serialNumber: string
-  resourceTypeCode: string
+  resourceTypeId: string
   meterCategoryCode: string
   tariffType: string
-  unit: string
   accuracyClass: string
   status?: string
   verificationDueDate?: string | null

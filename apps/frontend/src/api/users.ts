@@ -19,9 +19,15 @@ export interface UpdateUserPayload {
   status?: string
 }
 
-export async function getUsers(role?: string): Promise<AuthUser[]> {
+export async function getUsers(params?: {
+  role?: string
+  consumerId?: string
+}): Promise<AuthUser[]> {
   const { data } = await api.get<AuthUser[]>('/users', {
-    params: role ? { role } : undefined,
+    params: {
+      role: params?.role,
+      consumerId: params?.consumerId,
+    },
   })
   return data
 }

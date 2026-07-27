@@ -3,12 +3,20 @@ import { computed, reactive, ref, watch } from 'vue'
 import type { FormInstance, FormRules } from 'element-plus'
 import { ElMessage } from 'element-plus'
 import axios from 'axios'
+import { useAuthStore } from '../stores/auth'
 import { getObjects } from '../api/objects'
 import { getConsumers } from '../api/consumers'
-import { createMeter, updateMeter } from '../api/meters'
+import { createMeter, getMeters, updateMeter } from '../api/meters'
+import {
+  createResourceType,
+  getResourceTypes,
+} from '../api/resourceTypes'
 import type { EnergyObject } from '../types/object'
 import type { Consumer } from '../types/consumer'
 import type { CreateMeterPayload, Meter } from '../types/meter'
+import type { ResourceType } from '../types/resourceType'
+
+const CREATE_OPTION = '__create__'
 
 const props = defineProps<{
   modelValue: boolean
@@ -20,23 +28,35 @@ const emit = defineEmits<{
   saved: [meter: Meter]
 }>()
 
+const authStore = useAuthStore()
+const canCreateResourceType = computed(() => authStore.role === 'admin')
+
 const formRef = ref<FormInstance>()
 const saving = ref(false)
 const objects = ref<EnergyObject[]>([])
 const consumers = ref<Consumer[]>([])
+const meters = ref<Meter[]>([])
+const resourceTypes = ref<ResourceType[]>([])
+
+const createTypeVisible = ref(false)
+const creatingType = ref(false)
+const newType = reactive({
+  name: '',
+  unit: '',
+})
 
 const isEdit = computed(() => Boolean(props.meter?.id))
 
 const form = reactive<{
   objectId: string
   consumerId: string | null
+  parentMeterId: string | null
   ownerType: string
   name: string
   serialNumber: string
-  resourceTypeCode: string
+  resourceTypeId: string
   meterCategoryCode: string
   tariffType: string
-  unit: string
   accuracyClass: string
   installationLocation: string
   status: string
@@ -47,13 +67,13 @@ const form = reactive<{
 }>({
   objectId: '',
   consumerId: null,
+  parentMeterId: null,
   ownerType: 'object',
   name: '',
   serialNumber: '',
-  resourceTypeCode: 'electricity',
+  resourceTypeId: '',
   meterCategoryCode: 'residential',
   tariffType: 'single',
-  unit: 'kWh',
   accuracyClass: '1.0',
   installationLocation: '',
   status: 'active',
@@ -65,6 +85,37 @@ const form = reactive<{
 
 const objectConsumers = computed(() =>
   consumers.value.filter((item) => item.objectId === form.objectId),
+)
+
+const parentMeterOptions = computed(() =>
+  meters.value.filter(
+    (item) =>
+      item.objectId === form.objectId &&
+      item.id !== props.meter?.id &&
+      item.status === 'active',
+  ),
+)
+
+function parentMeterLabel(meter: Meter) {
+  const consumerPart = meter.consumer?.name
+    ? ` — ${meter.consumer.name}`
+    : ''
+  return `${meter.serialNumber}${consumerPart}`
+}
+
+const meterCategoryOptions = [
+  { value: 'residential', label: 'Жилой' },
+  { value: 'commercial', label: 'Коммерческий' },
+  { value: 'industrial', label: 'Промышленный' },
+  { value: 'mixed', label: 'Смешанный' },
+] as const
+
+const activeResourceTypes = computed(() =>
+  resourceTypes.value.filter((item) => item.status === 'active'),
+)
+
+const selectedResourceType = computed(() =>
+  resourceTypes.value.find((item) => item.id === form.resourceTypeId) ?? null,
 )
 
 const liveTransformerRatio = computed(() => {
@@ -98,14 +149,13 @@ const rules = computed<FormRules>(() => ({
     { required: true, message: 'Укажите серийный номер', trigger: 'blur' },
   ],
   ownerType: [{ required: true, message: 'Укажите владельца', trigger: 'change' }],
-  resourceTypeCode: [
-    { required: true, message: 'Укажите тип ресурса', trigger: 'change' },
+  resourceTypeId: [
+    { required: true, message: 'Выберите тип ресурса', trigger: 'change' },
   ],
   meterCategoryCode: [
     { required: true, message: 'Укажите категорию', trigger: 'change' },
   ],
   tariffType: [{ required: true, message: 'Укажите тип тарифа', trigger: 'change' }],
-  unit: [{ required: true, message: 'Укажите единицу', trigger: 'blur' }],
   accuracyClass: [
     { required: true, message: 'Укажите класс точности', trigger: 'blur' },
   ],
@@ -131,13 +181,14 @@ const visible = computed({
 function resetForm() {
   form.objectId = props.meter?.objectId ?? ''
   form.consumerId = props.meter?.consumerId ?? null
+  form.parentMeterId = props.meter?.parentMeterId ?? null
   form.ownerType = props.meter?.ownerType ?? 'object'
   form.name = props.meter?.name ?? ''
   form.serialNumber = props.meter?.serialNumber ?? ''
-  form.resourceTypeCode = props.meter?.resourceTypeCode ?? 'electricity'
+  form.resourceTypeId =
+    props.meter?.resourceTypeId ?? props.meter?.resourceType?.id ?? ''
   form.meterCategoryCode = props.meter?.meterCategoryCode ?? 'residential'
   form.tariffType = props.meter?.tariffType ?? 'single'
-  form.unit = props.meter?.unit ?? 'kWh'
   form.accuracyClass = props.meter?.accuracyClass ?? '1.0'
   form.installationLocation = props.meter?.installationLocation ?? ''
   form.status = props.meter?.status ?? 'active'
@@ -149,15 +200,38 @@ function resetForm() {
 
 async function loadOptions() {
   try {
-    const [objectsData, consumersData] = await Promise.all([
-      getObjects(),
-      getConsumers().catch(() => [] as Consumer[]),
-    ])
+    const [objectsData, consumersData, metersData, typesData] =
+      await Promise.all([
+        getObjects(),
+        getConsumers().catch(() => [] as Consumer[]),
+        getMeters().catch(() => [] as Meter[]),
+        getResourceTypes(),
+      ])
     objects.value = objectsData
     consumers.value = consumersData
+    meters.value = metersData
+    resourceTypes.value = typesData
+
+    if (!form.resourceTypeId) {
+      const electricity = typesData.find(
+        (item) => item.name === 'Электроэнергия' && item.status === 'active',
+      )
+      form.resourceTypeId = electricity?.id ?? typesData[0]?.id ?? ''
+    }
   } catch {
     objects.value = []
     consumers.value = []
+    meters.value = []
+    resourceTypes.value = []
+  }
+}
+
+function onResourceTypeChange(value: string) {
+  if (value === CREATE_OPTION) {
+    form.resourceTypeId = selectedResourceType.value?.id ?? ''
+    newType.name = ''
+    newType.unit = ''
+    createTypeVisible.value = true
   }
 }
 
@@ -170,6 +244,29 @@ function getErrorMessage(error: unknown): string {
   return isEdit.value ? 'Не удалось сохранить счётчик' : 'Не удалось создать счётчик'
 }
 
+async function onCreateResourceType() {
+  if (!newType.name.trim() || !newType.unit.trim()) {
+    ElMessage.warning('Укажите название и единицу измерения')
+    return
+  }
+
+  creatingType.value = true
+  try {
+    const created = await createResourceType({
+      name: newType.name.trim(),
+      unit: newType.unit.trim(),
+    })
+    resourceTypes.value = [...resourceTypes.value, created]
+    form.resourceTypeId = created.id
+    createTypeVisible.value = false
+    ElMessage.success('Тип ресурса создан')
+  } catch (error) {
+    ElMessage.error(getErrorMessage(error))
+  } finally {
+    creatingType.value = false
+  }
+}
+
 async function onSubmit() {
   const valid = await formRef.value?.validate().catch(() => false)
   if (!valid) return
@@ -179,13 +276,13 @@ async function onSubmit() {
     const payload: CreateMeterPayload = {
       objectId: form.objectId,
       consumerId: form.isMain ? null : form.consumerId || null,
+      parentMeterId: form.isMain ? null : form.parentMeterId || null,
       ownerType: form.ownerType,
       name: form.name.trim(),
       serialNumber: form.serialNumber.trim(),
-      resourceTypeCode: form.resourceTypeCode,
+      resourceTypeId: form.resourceTypeId,
       meterCategoryCode: form.meterCategoryCode,
       tariffType: form.tariffType,
-      unit: form.unit.trim(),
       accuracyClass: form.accuracyClass.trim(),
       installationLocation: form.installationLocation.trim(),
       status: form.status,
@@ -237,6 +334,12 @@ watch(
     ) {
       form.consumerId = null
     }
+    if (
+      form.parentMeterId &&
+      !parentMeterOptions.value.some((item) => item.id === form.parentMeterId)
+    ) {
+      form.parentMeterId = null
+    }
   },
 )
 
@@ -245,6 +348,7 @@ watch(
   (isMain) => {
     if (isMain) {
       form.consumerId = null
+      form.parentMeterId = null
     }
   },
 )
@@ -317,6 +421,27 @@ watch(
         </template>
         <el-switch v-model="form.isMain" />
       </el-form-item>
+      <el-form-item
+        v-if="!form.isMain"
+        label="Родительский счётчик (если этот счётчик подчинён другому)"
+      >
+        <el-select
+          v-model="form.parentMeterId"
+          clearable
+          filterable
+          style="width: 100%"
+          :disabled="!form.objectId"
+          placeholder="Нет (корневой счётчик)"
+        >
+          <el-option label="Нет (корневой счётчик)" :value="null" />
+          <el-option
+            v-for="item in parentMeterOptions"
+            :key="item.id"
+            :label="parentMeterLabel(item)"
+            :value="item.id"
+          />
+        </el-select>
+      </el-form-item>
       <div class="row">
         <el-form-item label="Владелец" prop="ownerType" class="half">
           <el-select v-model="form.ownerType" style="width: 100%">
@@ -324,25 +449,53 @@ watch(
             <el-option label="Потребитель" value="consumer" />
           </el-select>
         </el-form-item>
-        <el-form-item label="Тип тарифа" prop="tariffType" class="half">
+        <el-form-item label="Число тарифных зон" prop="tariffType" class="half">
           <el-select v-model="form.tariffType" style="width: 100%">
-            <el-option label="Однотарифный" value="single" />
-            <el-option label="Двухтарифный" value="double" />
-            <el-option label="Трёхтарифный" value="triple" />
+            <el-option label="Однотарифный (T1)" value="single" />
+            <el-option label="Двухтарифный (T2+T3)" value="double" />
+            <el-option label="Трёхтарифный (T1+T2+T3)" value="triple" />
           </el-select>
         </el-form-item>
       </div>
+      <el-form-item label="Тип ресурса" prop="resourceTypeId">
+        <el-select
+          v-model="form.resourceTypeId"
+          filterable
+          placeholder="Выберите тип ресурса"
+          style="width: 100%"
+          @change="onResourceTypeChange"
+        >
+          <el-option
+            v-for="item in activeResourceTypes"
+            :key="item.id"
+            :label="`${item.name} (${item.unit})`"
+            :value="item.id"
+          />
+          <el-option
+            v-if="canCreateResourceType"
+            :value="CREATE_OPTION"
+            label="+ Добавить новый тип"
+          />
+        </el-select>
+        <div v-if="selectedResourceType" class="unit-hint">
+          Единица измерения: {{ selectedResourceType.unit }}
+        </div>
+      </el-form-item>
       <div class="row">
-        <el-form-item label="Тип ресурса" prop="resourceTypeCode" class="half">
-          <el-input v-model="form.resourceTypeCode" />
-        </el-form-item>
-        <el-form-item label="Категория" prop="meterCategoryCode" class="half">
-          <el-input v-model="form.meterCategoryCode" />
-        </el-form-item>
-      </div>
-      <div class="row">
-        <el-form-item label="Единица" prop="unit" class="half">
-          <el-input v-model="form.unit" />
+        <el-form-item label="Категория счётчика" prop="meterCategoryCode" class="half">
+          <el-select
+            v-model="form.meterCategoryCode"
+            filterable
+            placeholder="Выберите категорию"
+            style="width: 100%"
+          >
+            <el-option
+              v-for="item in meterCategoryOptions"
+              :key="item.value"
+              :label="item.label"
+              :value="item.value"
+            />
+          </el-select>
         </el-form-item>
         <el-form-item label="Класс точности" prop="accuracyClass" class="half">
           <el-input v-model="form.accuracyClass" />
@@ -406,6 +559,32 @@ watch(
       </el-button>
     </template>
   </el-dialog>
+
+  <el-dialog
+    v-model="createTypeVisible"
+    title="Новый тип ресурса"
+    width="420px"
+    append-to-body
+  >
+    <el-form label-position="top">
+      <el-form-item label="Название">
+        <el-input v-model="newType.name" placeholder="Сжатый воздух" />
+      </el-form-item>
+      <el-form-item label="Единица измерения">
+        <el-input v-model="newType.unit" placeholder="м³" />
+      </el-form-item>
+    </el-form>
+    <template #footer>
+      <el-button @click="createTypeVisible = false">Отмена</el-button>
+      <el-button
+        type="primary"
+        :loading="creatingType"
+        @click="onCreateResourceType"
+      >
+        Создать
+      </el-button>
+    </template>
+  </el-dialog>
 </template>
 
 <style scoped>
@@ -420,8 +599,9 @@ watch(
   min-width: 200px;
 }
 
-.ratio-hint {
-  margin: 0 0 1rem;
+.ratio-hint,
+.unit-hint {
+  margin: 0.35rem 0 0;
   color: #4b5563;
   font-size: 14px;
 }

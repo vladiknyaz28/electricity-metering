@@ -21,7 +21,7 @@ withDefaults(
   >
     <div class="entity-card__inner">
       <div class="entity-card__header">
-        <h3 class="entity-card__title">{{ title }}</h3>
+        <h3 class="entity-card__title" :title="title">{{ title }}</h3>
         <div class="entity-card__header-side">
           <slot name="header-extra" />
           <el-tag :type="statusType" size="small">{{ statusLabel }}</el-tag>
@@ -68,27 +68,30 @@ withDefaults(
 .entity-card__header {
   display: flex;
   justify-content: space-between;
-  align-items: flex-start;
+  align-items: center;
   gap: 0.75rem;
   margin-bottom: 0.75rem;
 }
 
 .entity-card__title {
   margin: 0;
-  flex: 1;
-  min-width: 0;
-  font-size: 17px;
+  flex: 1 1 auto;
+  min-width: 4rem;
+  max-width: 100%;
+  font-size: 1.125rem;
   font-weight: 700;
   line-height: 1.35;
   color: #111827;
-  word-break: break-word;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .entity-card__header-side {
   display: flex;
   align-items: center;
   gap: 0.5rem;
-  flex-shrink: 0;
+  flex: 0 0 auto;
 }
 
 .entity-card__body {

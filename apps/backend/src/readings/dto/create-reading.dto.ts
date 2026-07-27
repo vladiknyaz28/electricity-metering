@@ -15,9 +15,10 @@ export class CreateReadingDto {
   @IsDateString()
   readingDate: string;
 
+  @IsOptional()
   @IsNumber()
   @Type(() => Number)
-  valueT1: number;
+  valueT1?: number;
 
   @IsOptional()
   @IsNumber()

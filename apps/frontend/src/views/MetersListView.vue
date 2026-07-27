@@ -13,6 +13,7 @@ import type { EnergyObject } from '../types/object'
 import type { Consumer } from '../types/consumer'
 import EntityCard from '../components/EntityCard.vue'
 import MeterFormDialog from '../components/MeterFormDialog.vue'
+import MinusovkaDialog from '../components/MinusovkaDialog.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -35,6 +36,8 @@ const pageSize = 9
 
 const dialogVisible = ref(false)
 const editingMeter = ref<Meter | null>(null)
+const minusovkaVisible = ref(false)
+const minusovkaMeter = ref<Meter | null>(null)
 
 const tariffTypeLabels: Record<string, string> = {
   single: 'Однотарифный',
@@ -76,7 +79,7 @@ const filterBannerText = computed(() => {
 
 const filteredMeters = computed(() => {
   const query = search.value.trim().toLowerCase()
-  return meters.value.filter((item) => {
+  const matched = meters.value.filter((item) => {
     const matchesObjectQuery = filterObjectId.value
       ? item.objectId === filterObjectId.value
       : objectFilter.value === 'all'
@@ -102,7 +105,62 @@ const filteredMeters = computed(() => {
       matchesSearch
     )
   })
+  return sortMetersByHierarchy(matched)
 })
+
+/** Children immediately after their parent (flat grouping). */
+function sortMetersByHierarchy(list: Meter[]): Meter[] {
+  const byId = new Map(list.map((item) => [item.id, item]))
+  const childrenMap = new Map<string | null, Meter[]>()
+
+  for (const item of list) {
+    const parentId =
+      item.parentMeterId && byId.has(item.parentMeterId)
+        ? item.parentMeterId
+        : null
+    const bucket = childrenMap.get(parentId) ?? []
+    bucket.push(item)
+    childrenMap.set(parentId, bucket)
+  }
+
+  for (const bucket of childrenMap.values()) {
+    bucket.sort((a, b) => a.name.localeCompare(b.name, 'ru'))
+  }
+
+  const result: Meter[] = []
+  const visited = new Set<string>()
+
+  function walk(parentId: string | null) {
+    const kids = childrenMap.get(parentId) ?? []
+    for (const kid of kids) {
+      if (visited.has(kid.id)) continue
+      visited.add(kid.id)
+      result.push(kid)
+      walk(kid.id)
+    }
+  }
+
+  walk(null)
+
+  for (const item of list) {
+    if (!visited.has(item.id)) {
+      result.push(item)
+    }
+  }
+
+  return result
+}
+
+function parentTagLabel(meter: Meter) {
+  if (!meter.parentMeter) return meter.parentMeterId || '—'
+  const name = meter.parentMeter.name || meter.parentMeter.serialNumber
+  return `${name}`
+}
+
+function openMinusovka(meter: Meter) {
+  minusovkaMeter.value = meter
+  minusovkaVisible.value = true
+}
 
 const pagedMeters = computed(() => {
   const start = (currentPage.value - 1) * pageSize
@@ -159,6 +217,10 @@ function formatRatio(value: number | string | null) {
   return Number.isFinite(num) ? String(num) : String(value)
 }
 
+function meterUnit(meter: Meter) {
+  return meter.resourceType?.unit || meter.unit || ''
+}
+
 function openCreate() {
   editingMeter.value = null
   dialogVisible.value = true
@@ -177,13 +239,15 @@ function onSaved(saved: Meter) {
       _count: saved._count ?? meters.value[index]._count,
       object: saved.object ?? meters.value[index].object,
       consumer: saved.consumer ?? meters.value[index].consumer,
+      parentMeter: saved.parentMeter ?? meters.value[index].parentMeter,
     }
   } else {
     meters.value.unshift({
       ...saved,
-      _count: saved._count ?? { readings: 0 },
+      _count: saved._count ?? { readings: 0, children: 0 },
     })
   }
+  void loadData()
 }
 
 async function onDelete(meter: Meter) {
@@ -334,14 +398,37 @@ onMounted(async () => {
         <EntityCard
           v-for="item in pagedMeters"
           :key="item.id"
-          :title="item.name"
+          :title="`${item.name} · ${item.serialNumber}`"
           :status-label="statusLabel(item.status)"
           :status-type="item.status === 'active' ? 'success' : 'info'"
         >
-          <template v-if="item.isMain" #header-extra>
-            <el-tag type="warning" size="small">Главный</el-tag>
-          </template>
+          <div
+            v-if="item.isMain || item.parentMeterId || (item._count?.children ?? 0) > 0"
+            class="tags"
+          >
+            <el-tag v-if="item.isMain" type="warning" size="small">
+              Главный
+            </el-tag>
+            <el-tag v-if="item.parentMeterId" type="info" size="small">
+              Подчинён: {{ parentTagLabel(item) }}
+            </el-tag>
+            <el-tag
+              v-if="(item._count?.children ?? 0) > 0"
+              type="success"
+              size="small"
+            >
+              Групповой (подчинено счётчиков:
+              {{ item._count.children }})
+            </el-tag>
+          </div>
           <div class="line">Серийный номер: {{ item.serialNumber }}</div>
+          <div class="line">
+            Ресурс:
+            {{ item.resourceType?.name || item.resourceTypeCode || '—' }}
+            <template v-if="meterUnit(item)">
+              ({{ meterUnit(item) }})
+            </template>
+          </div>
           <div
             v-if="item.transformerRatio != null && item.transformerRatio !== ''"
             class="line"
@@ -375,6 +462,14 @@ onMounted(async () => {
           </div>
 
           <template v-if="canManage" #actions>
+            <el-button
+              v-if="(item._count?.children ?? 0) > 0"
+              type="warning"
+              plain
+              @click="openMinusovka(item)"
+            >
+              Посчитать минусовку
+            </el-button>
             <el-button type="primary" plain @click="openEdit(item)">
               Редактировать
             </el-button>
@@ -419,6 +514,11 @@ onMounted(async () => {
       v-model="dialogVisible"
       :meter="editingMeter"
       @saved="onSaved"
+    />
+
+    <MinusovkaDialog
+      v-model="minusovkaVisible"
+      :meter="minusovkaMeter"
     />
   </div>
 </template>
@@ -465,6 +565,13 @@ onMounted(async () => {
   grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
   gap: 1rem;
   align-items: stretch;
+}
+
+.tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin: 0 0 0.5rem;
 }
 
 .pager {

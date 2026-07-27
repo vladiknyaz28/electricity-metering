@@ -16,6 +16,7 @@ const menuItems = [
   { path: '/consumers', label: 'Потребители' },
   { path: '/meters', label: 'Счётчики' },
   { path: '/readings', label: 'Показания' },
+  { path: '/tariffs', label: 'Тарифы' },
 ]
 
 function isActive(path: string) {

@@ -15,40 +15,60 @@ import { UpdateUserDto } from './dto/update-user.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
+import { CurrentUser } from '../auth/decorators/current-user.decorator';
+
+type AuthUser = {
+  id: string;
+  role: string;
+  consumerId?: string | null;
+};
 
 @UseGuards(JwtAuthGuard, RolesGuard)
-@Roles('admin')
 @Controller('users')
 export class UsersController {
   constructor(private readonly usersService: UsersService) {}
 
   @Post()
-  create(@Body() dto: CreateUserDto) {
-    return this.usersService.create(dto);
+  @Roles('admin', 'object_manager')
+  create(@Body() dto: CreateUserDto, @CurrentUser() currentUser: AuthUser) {
+    return this.usersService.create(dto, currentUser);
   }
 
   @Get()
-  findAll(@Query('role') role?: string) {
-    return this.usersService.findAll(role);
+  @Roles('admin', 'object_manager')
+  findAll(
+    @Query('role') role: string | undefined,
+    @Query('consumerId') consumerId: string | undefined,
+    @CurrentUser() currentUser: AuthUser,
+  ) {
+    return this.usersService.findAll({ role, consumerId }, currentUser);
   }
 
   @Get(':id')
-  findOne(@Param('id') id: string) {
-    return this.usersService.findOne(id);
+  @Roles('admin', 'object_manager')
+  findOne(@Param('id') id: string, @CurrentUser() currentUser: AuthUser) {
+    return this.usersService.findOne(id, currentUser);
   }
 
   @Patch(':id')
-  update(@Param('id') id: string, @Body() dto: UpdateUserDto) {
-    return this.usersService.update(id, dto);
+  @Roles('admin', 'object_manager')
+  update(
+    @Param('id') id: string,
+    @Body() dto: UpdateUserDto,
+    @CurrentUser() currentUser: AuthUser,
+  ) {
+    return this.usersService.update(id, dto, currentUser);
   }
 
   @Delete(':id/permanent')
-  hardDelete(@Param('id') id: string) {
-    return this.usersService.hardDelete(id);
+  @Roles('admin', 'object_manager')
+  hardDelete(@Param('id') id: string, @CurrentUser() currentUser: AuthUser) {
+    return this.usersService.hardDelete(id, currentUser);
   }
 
   @Delete(':id')
-  remove(@Param('id') id: string) {
-    return this.usersService.remove(id);
+  @Roles('admin', 'object_manager')
+  remove(@Param('id') id: string, @CurrentUser() currentUser: AuthUser) {
+    return this.usersService.remove(id, currentUser);
   }
 }

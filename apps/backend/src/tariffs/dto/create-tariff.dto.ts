@@ -7,6 +7,7 @@ import {
   IsNumber,
   IsOptional,
   IsString,
+  Min,
   ValidateNested,
 } from 'class-validator';
 
@@ -16,6 +17,7 @@ export class TariffZoneDto {
   zoneCode: string;
 
   @IsNumber()
+  @Min(0.001)
   @Type(() => Number)
   rate: number;
 }
@@ -27,21 +29,22 @@ export class CreateTariffDto {
 
   @IsNotEmpty()
   @IsString()
-  resourceTypeCode: string;
+  resourceTypeId: string;
+
+  /** @deprecated синхронизируется из ResourceType */
+  @IsOptional()
+  @IsString()
+  resourceTypeCode?: string;
 
   @IsDateString()
   validFrom: string;
-
-  @IsOptional()
-  @IsDateString()
-  validTo?: string;
 
   @IsOptional()
   @IsString()
   status?: string;
 
   @IsArray()
-  @ArrayMinSize(1)
+  @ArrayMinSize(1, { message: 'Укажите хотя бы одну ставку' })
   @ValidateNested({ each: true })
   @Type(() => TariffZoneDto)
   zones: TariffZoneDto[];

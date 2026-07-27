@@ -3,12 +3,17 @@ import {
   ConflictException,
   ForbiddenException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateMeterDto } from './dto/create-meter.dto';
 import { UpdateMeterDto } from './dto/update-meter.dto';
+import {
+  resolvePhysicalValues,
+  totalConsumptionFromZones,
+} from '../common/meter-zones';
 
 const meterInclude = {
   object: {
@@ -23,9 +28,26 @@ const meterInclude = {
       name: true,
     },
   },
+  resourceType: {
+    select: {
+      id: true,
+      name: true,
+      unit: true,
+      isSystem: true,
+      status: true,
+    },
+  },
+  parentMeter: {
+    select: {
+      id: true,
+      name: true,
+      serialNumber: true,
+    },
+  },
   _count: {
     select: {
       readings: true,
+      children: true,
     },
   },
 } as const;
@@ -45,6 +67,8 @@ type TransformerFields = {
 
 @Injectable()
 export class MetersService {
+  private readonly logger = new Logger(MetersService.name);
+
   constructor(private readonly prisma: PrismaService) {}
 
   async create(dto: CreateMeterDto, currentUser: CurrentUser) {
@@ -57,11 +81,16 @@ export class MetersService {
       await this.ensureConsumerBelongsToObject(consumerId, dto.objectId);
     }
 
+    const parentMeterId = isMain ? null : (dto.parentMeterId ?? null);
+    await this.validateParentMeter(parentMeterId, dto.objectId, null);
+
     const transformer = this.resolveTransformerFields(
       dto.hasCurrentTransformer ?? false,
       dto.primaryCurrent,
       dto.secondaryCurrent,
     );
+
+    const resourceType = await this.getResourceTypeOrThrow(dto.resourceTypeId);
 
     try {
       return await this.prisma.$transaction(async (tx) => {
@@ -79,16 +108,19 @@ export class MetersService {
             ownerType: dto.ownerType,
             name: dto.name,
             serialNumber: dto.serialNumber,
-            resourceTypeCode: dto.resourceTypeCode,
+            // legacy fields: синхронизируем из справочника, в UI больше не вводятся
+            resourceTypeCode: resourceType.name,
+            resourceTypeId: resourceType.id,
             meterCategoryCode: dto.meterCategoryCode,
             tariffType: dto.tariffType,
-            unit: dto.unit,
+            unit: resourceType.unit,
             accuracyClass: dto.accuracyClass,
             status: dto.status ?? 'active',
             verificationDueDate: dto.verificationDueDate
               ? new Date(dto.verificationDueDate)
               : null,
             isMain,
+            parentMeterId,
             installationLocation: dto.installationLocation,
             ...transformer,
           },
@@ -136,8 +168,9 @@ export class MetersService {
       this.assertObjectManagerAccess(currentUser, object.managerId);
     }
 
+    const targetIsMain = dto.isMain ?? existing.isMain;
     const targetConsumerId =
-      dto.isMain === true
+      targetIsMain === true
         ? null
         : dto.consumerId !== undefined
           ? dto.consumerId
@@ -155,14 +188,34 @@ export class MetersService {
       isMain: dtoIsMain,
       consumerId: _consumerId,
       objectId: dtoObjectId,
+      resourceTypeId,
+      resourceTypeCode: _legacyCode,
+      unit: _legacyUnit,
+      parentMeterId: dtoParentMeterId,
       ...rest
     } = dto;
+
+    let parentMeterId: string | null | undefined = undefined;
+    if (targetIsMain) {
+      parentMeterId = null;
+    } else if (dtoParentMeterId !== undefined) {
+      parentMeterId = dtoParentMeterId;
+    }
+
+    if (parentMeterId !== undefined) {
+      await this.validateParentMeter(parentMeterId, targetObjectId, id);
+    }
 
     const data: Prisma.MeterUncheckedUpdateInput = {
       ...rest,
       objectId: dtoObjectId,
       isMain: dtoIsMain,
-      consumerId: dto.isMain === true ? null : dto.consumerId,
+      consumerId: targetIsMain
+        ? null
+        : dto.consumerId !== undefined
+          ? targetConsumerId
+          : undefined,
+      parentMeterId,
       verificationDueDate:
         verificationDueDate !== undefined
           ? verificationDueDate
@@ -170,6 +223,13 @@ export class MetersService {
             : null
           : undefined,
     };
+
+    if (resourceTypeId) {
+      const resourceType = await this.getResourceTypeOrThrow(resourceTypeId);
+      data.resourceTypeId = resourceType.id;
+      data.unit = resourceType.unit;
+      data.resourceTypeCode = resourceType.name;
+    }
 
     const shouldUpdateTransformer =
       hasCurrentTransformer !== undefined ||
@@ -204,6 +264,10 @@ export class MetersService {
           });
         }
 
+        if (dto.isMain === true || targetIsMain) {
+          data.parentMeterId = null;
+        }
+
         return tx.meter.update({
           where: { id },
           data,
@@ -212,6 +276,288 @@ export class MetersService {
       });
     } catch (error) {
       this.rethrowSerialConflict(error);
+    }
+  }
+
+  async getMinusovka(
+    meterId: string,
+    periodStart: string,
+    periodEnd: string,
+    currentUser: CurrentUser,
+  ) {
+    if (!periodStart || !periodEnd) {
+      throw new BadRequestException(
+        'Параметры periodStart и periodEnd обязательны (YYYY-MM-DD)',
+      );
+    }
+
+    const start = new Date(`${periodStart}T00:00:00.000Z`);
+    const end = new Date(`${periodEnd}T23:59:59.999Z`);
+
+    if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) {
+      throw new BadRequestException('Некорректный формат даты периода');
+    }
+
+    if (start > end) {
+      throw new BadRequestException(
+        'periodStart не может быть позже periodEnd',
+      );
+    }
+
+    const meter = await this.prisma.meter.findUnique({
+      where: { id: meterId },
+      include: {
+        children: {
+          include: {
+            consumer: {
+              select: { id: true, name: true },
+            },
+          },
+        },
+      },
+    });
+
+    if (!meter) {
+      throw new NotFoundException('Счётчик не найден');
+    }
+
+    await this.assertMeterAccess(meter, currentUser, 'Доступ запрещён');
+
+    if (meter.children.length === 0) {
+      throw new BadRequestException(
+        'У этого счётчика нет подчинённых счётчиков, минусовку считать не с чем',
+      );
+    }
+
+    const parentResult = await this.calculateMeterConsumption(
+      meter.id,
+      start,
+      end,
+    );
+    const parentConsumption = parentResult.consumption;
+
+    const breakdown: Array<{
+      meterId: string;
+      meterName: string;
+      consumerName: string | null;
+      consumption: number;
+      hasData: boolean;
+    }> = [];
+
+    let childrenConsumption = 0;
+    for (const child of meter.children) {
+      const childResult = await this.calculateMeterConsumption(
+        child.id,
+        start,
+        end,
+      );
+      childrenConsumption += childResult.consumption;
+      breakdown.push({
+        meterId: child.id,
+        meterName: child.name,
+        consumerName: child.consumer?.name ?? null,
+        consumption: childResult.consumption,
+        hasData: childResult.hasData,
+      });
+    }
+
+    const minusovka = parentConsumption - childrenConsumption;
+
+    this.logger.debug(
+      `[minusovka] meter=${meterId} period=${periodStart}..${periodEnd} ` +
+        `parent=${parentConsumption} (hasData=${parentResult.hasData}) ` +
+        `children=${childrenConsumption} minusovka=${minusovka} ` +
+        `kids=${meter.children.length}`,
+    );
+
+    return {
+      parentMeterId: meter.id,
+      parentMeterName: meter.name,
+      parentConsumption,
+      childrenConsumption,
+      minusovka,
+      isAnomaly: minusovka < 0,
+      breakdown,
+    };
+  }
+
+  /**
+   * Потребление счётчика за период [periodStart, periodEnd].
+   * Та же модель, что строки таблицы Показаний: для каждой пары
+   * consecutive readings, где дата ТЕКУЩЕГО показания попадает в период,
+   * добавляем (current − previous) × transformerRatio по активным зонам.
+   *
+   * exclusiveStart=true — интервал (periodStart, periodEnd], нужен для
+   * остатка по строке родителя (чтобы не захватить предыдущую строку).
+   * exclusiveStart=false — [periodStart, periodEnd] для месячной минусовки.
+   */
+  async calculateMeterConsumption(
+    meterId: string,
+    periodStart: Date,
+    periodEnd: Date,
+    options?: { exclusiveStart?: boolean },
+  ): Promise<{ consumption: number; hasData: boolean }> {
+    const meter = await this.prisma.meter.findUnique({
+      where: { id: meterId },
+      select: {
+        id: true,
+        tariffType: true,
+        transformerRatio: true,
+      },
+    });
+
+    if (!meter) {
+      return { consumption: 0, hasData: false };
+    }
+
+    const startBound = this.startOfUtcDay(periodStart);
+    const endBound = this.endOfUtcDay(periodEnd);
+    const exclusiveStart = options?.exclusiveStart === true;
+
+    const readings = await this.prisma.meterReading.findMany({
+      where: { meterId },
+      orderBy: { readingDate: 'asc' },
+      select: {
+        id: true,
+        readingDate: true,
+        valueT1: true,
+        valueT2: true,
+        valueT3: true,
+      },
+    });
+
+    if (readings.length < 2) {
+      this.logger.debug(
+        `[consumption] meter=${meterId} readings=${readings.length} → 0`,
+      );
+      return { consumption: 0, hasData: false };
+    }
+
+    const ratio = this.resolveTransformerRatio(meter.transformerRatio);
+
+    let consumption = 0;
+    let intervals = 0;
+
+    for (let index = 1; index < readings.length; index++) {
+      const previous = readings[index - 1];
+      const current = readings[index];
+      const inPeriod = exclusiveStart
+        ? current.readingDate > startBound && current.readingDate <= endBound
+        : current.readingDate >= startBound && current.readingDate <= endBound;
+
+      if (!inPeriod) {
+        continue;
+      }
+
+      const curPhys = resolvePhysicalValues(meter.tariffType, current);
+      const prevPhys = resolvePhysicalValues(meter.tariffType, previous);
+
+      const cT1 = this.round4((curPhys.T1 - prevPhys.T1) * ratio);
+      const cT2 = this.round4((curPhys.T2 - prevPhys.T2) * ratio);
+      const cT3 = this.round4((curPhys.T3 - prevPhys.T3) * ratio);
+
+      consumption += this.round4(
+        totalConsumptionFromZones(cT1, cT2, cT3),
+      );
+      intervals += 1;
+    }
+
+    consumption = this.round4(consumption);
+
+    this.logger.debug(
+      `[consumption] meter=${meterId} period=${startBound.toISOString().slice(0, 10)}..${endBound.toISOString().slice(0, 10)} ` +
+        `exclusiveStart=${exclusiveStart} intervals=${intervals} consumption=${consumption}`,
+    );
+
+    return { consumption, hasData: intervals > 0 };
+  }
+
+  private resolveTransformerRatio(
+    value: Prisma.Decimal | number | null | undefined,
+  ): number {
+    if (value == null) {
+      return 1;
+    }
+    const n = Number(value);
+    return Number.isFinite(n) && n > 0 ? n : 1;
+  }
+
+  private startOfUtcDay(date: Date): Date {
+    return new Date(
+      Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()),
+    );
+  }
+
+  private endOfUtcDay(date: Date): Date {
+    return new Date(
+      Date.UTC(
+        date.getUTCFullYear(),
+        date.getUTCMonth(),
+        date.getUTCDate(),
+        23,
+        59,
+        59,
+        999,
+      ),
+    );
+  }
+
+  private round4(value: number): number {
+    return Math.round(value * 10000) / 10000;
+  }
+
+  private async validateParentMeter(
+    parentMeterId: string | null,
+    objectId: string,
+    selfId: string | null,
+  ) {
+    if (!parentMeterId) {
+      return;
+    }
+
+    if (selfId && parentMeterId === selfId) {
+      throw new BadRequestException(
+        'Счётчик не может быть родителем самому себе',
+      );
+    }
+
+    const parent = await this.prisma.meter.findUnique({
+      where: { id: parentMeterId },
+      select: { id: true, objectId: true, parentMeterId: true },
+    });
+
+    if (!parent) {
+      throw new BadRequestException('Родительский счётчик не найден');
+    }
+
+    if (parent.objectId !== objectId) {
+      throw new BadRequestException(
+        'Родительский счётчик должен принадлежать тому же объекту',
+      );
+    }
+
+    if (!selfId) {
+      return;
+    }
+
+    let cursor: string | null = parent.parentMeterId;
+    const visited = new Set<string>([parent.id]);
+
+    while (cursor) {
+      if (cursor === selfId) {
+        throw new BadRequestException('Циклическая вложенность счётчиков');
+      }
+      if (visited.has(cursor)) {
+        break;
+      }
+      visited.add(cursor);
+
+      const next: { id: string; parentMeterId: string | null } | null =
+        await this.prisma.meter.findUnique({
+          where: { id: cursor },
+          select: { id: true, parentMeterId: true },
+        });
+      cursor = next?.parentMeterId ?? null;
     }
   }
 
@@ -366,6 +712,19 @@ export class MetersService {
     if (managerId !== currentUser.id) {
       throw new ForbiddenException('Вы не являетесь менеджером этого объекта');
     }
+  }
+
+  private async getResourceTypeOrThrow(id: string) {
+    const resourceType = await this.prisma.resourceType.findUnique({
+      where: { id },
+    });
+    if (!resourceType) {
+      throw new NotFoundException('Тип ресурса не найден');
+    }
+    if (resourceType.status !== 'active') {
+      throw new BadRequestException('Тип ресурса неактивен');
+    }
+    return resourceType;
   }
 
   private async getObjectOrThrow(objectId: string) {

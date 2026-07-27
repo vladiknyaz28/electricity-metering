@@ -7,6 +7,7 @@ import {
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { TariffsService } from '../tariffs/tariffs.service';
 import { CreateConsumerDto } from './dto/create-consumer.dto';
 import { UpdateConsumerDto } from './dto/update-consumer.dto';
 
@@ -17,11 +18,21 @@ const consumerInclude = {
       name: true,
     },
   },
-  tariff: {
+  meters: {
     select: {
       id: true,
       name: true,
+      serialNumber: true,
+      parentMeterId: true,
+      parentMeter: {
+        select: {
+          id: true,
+          name: true,
+          serialNumber: true,
+        },
+      },
     },
+    orderBy: { name: 'asc' as const },
   },
   _count: {
     select: {
@@ -39,12 +50,16 @@ type CurrentUser = {
 
 @Injectable()
 export class ConsumerService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly tariffsService: TariffsService,
+  ) {}
 
   async create(dto: CreateConsumerDto, currentUser: CurrentUser) {
     await this.assertManagedObjectAccess(dto.objectId, currentUser);
+    await this.assertTariffFamily(dto.tariffId);
 
-    return this.prisma.consumer.create({
+    const consumer = await this.prisma.consumer.create({
       data: {
         objectId: dto.objectId,
         name: dto.name,
@@ -55,19 +70,23 @@ export class ConsumerService {
         email: dto.email,
         area: dto.area,
         sharePercent: dto.sharePercent,
-        tariffId: dto.tariffId,
+        tariffId: dto.tariffId ?? null,
         status: dto.status ?? 'active',
       },
       include: consumerInclude,
     });
+
+    return this.withTariff(consumer);
   }
 
   async findAll(currentUser: CurrentUser) {
-    return this.prisma.consumer.findMany({
+    const consumers = await this.prisma.consumer.findMany({
       where: this.scopeWhere(currentUser),
       include: consumerInclude,
       orderBy: { createdAt: 'desc' },
     });
+
+    return Promise.all(consumers.map((item) => this.withTariff(item)));
   }
 
   async findOneForUser(id: string, currentUser: CurrentUser) {
@@ -100,7 +119,7 @@ export class ConsumerService {
       throw new ForbiddenException('Доступ запрещён');
     }
 
-    return consumer;
+    return this.withTariff(consumer);
   }
 
   async update(id: string, dto: UpdateConsumerDto, currentUser: CurrentUser) {
@@ -111,22 +130,30 @@ export class ConsumerService {
       await this.assertManagedObjectAccess(dto.objectId, currentUser);
     }
 
-    return this.prisma.consumer.update({
+    if (dto.tariffId !== undefined) {
+      await this.assertTariffFamily(dto.tariffId);
+    }
+
+    const consumer = await this.prisma.consumer.update({
       where: { id },
       data: dto,
       include: consumerInclude,
     });
+
+    return this.withTariff(consumer);
   }
 
   async remove(id: string, currentUser: CurrentUser) {
     const existing = await this.findExisting(id);
     await this.assertManagedObjectAccess(existing.objectId, currentUser);
 
-    return this.prisma.consumer.update({
+    const consumer = await this.prisma.consumer.update({
       where: { id },
       data: { status: 'inactive' },
       include: consumerInclude,
     });
+
+    return this.withTariff(consumer);
   }
 
   async hardDelete(id: string, currentUser: CurrentUser) {
@@ -172,6 +199,56 @@ export class ConsumerService {
     return { message: 'Потребитель удалён окончательно' };
   }
 
+  private async withTariff<T extends { tariffId: string | null }>(consumer: T) {
+    if (!consumer.tariffId) {
+      return { ...consumer, tariff: null };
+    }
+
+    const version = await this.tariffsService.resolveActiveTariffVersion(
+      consumer.tariffId,
+      new Date(),
+    );
+
+    if (!version) {
+      return {
+        ...consumer,
+        tariff: {
+          id: consumer.tariffId,
+          name: 'Тариф не найден',
+          familyId: consumer.tariffId,
+        },
+      };
+    }
+
+    return {
+      ...consumer,
+      tariff: {
+        id: version.familyId ?? version.id,
+        familyId: version.familyId ?? version.id,
+        name: version.name,
+        resourceType: version.resourceType,
+        zones: version.zones,
+        validFrom: version.validFrom,
+        validTo: version.validTo,
+      },
+    };
+  }
+
+  private async assertTariffFamily(tariffId: string | null | undefined) {
+    if (tariffId == null || tariffId === '') {
+      return;
+    }
+
+    const open = await this.prisma.tariff.findFirst({
+      where: { familyId: tariffId, validTo: null, status: 'active' },
+      select: { id: true },
+    });
+
+    if (!open) {
+      throw new BadRequestException('Указанная семья тарифов не найдена');
+    }
+  }
+
   private async findExisting(id: string) {
     const consumer = await this.prisma.consumer.findUnique({ where: { id } });
     if (!consumer) {
@@ -196,7 +273,9 @@ export class ConsumerService {
     objectId: string,
     currentUser: CurrentUser,
   ) {
-    const object = await this.prisma.object.findUnique({ where: { id: objectId } });
+    const object = await this.prisma.object.findUnique({
+      where: { id: objectId },
+    });
     if (!object) {
       throw new NotFoundException('Объект не найден');
     }

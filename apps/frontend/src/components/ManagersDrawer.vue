@@ -112,7 +112,7 @@ async function loadData() {
   loading.value = true
   try {
     const [managersData, objectsData] = await Promise.all([
-      getUsers('object_manager'),
+      getUsers({ role: 'object_manager' }),
       getObjects(),
     ])
     managers.value = managersData

@@ -11,6 +11,7 @@ import { MetersModule } from './meters/meters.module';
 import { ReadingsModule } from './readings/readings.module';
 import { TariffsModule } from './tariffs/tariffs.module';
 import { ChargesModule } from './charges/charges.module';
+import { ResourceTypesModule } from './resource-types/resource-types.module';
 
 @Module({
   imports: [
@@ -24,6 +25,7 @@ import { ChargesModule } from './charges/charges.module';
     ReadingsModule,
     TariffsModule,
     ChargesModule,
+    ResourceTypesModule,
   ],
   controllers: [AppController],
   providers: [AppService],

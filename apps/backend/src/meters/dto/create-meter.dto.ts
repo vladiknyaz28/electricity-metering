@@ -5,6 +5,7 @@ import {
   IsNumber,
   IsOptional,
   IsString,
+  ValidateIf,
 } from 'class-validator';
 
 export class CreateMeterDto {
@@ -30,7 +31,12 @@ export class CreateMeterDto {
 
   @IsNotEmpty()
   @IsString()
-  resourceTypeCode: string;
+  resourceTypeId: string;
+
+  /** @deprecated используйте resourceTypeId; заполняется на сервере */
+  @IsOptional()
+  @IsString()
+  resourceTypeCode?: string;
 
   @IsNotEmpty()
   @IsString()
@@ -40,9 +46,10 @@ export class CreateMeterDto {
   @IsString()
   tariffType: string;
 
-  @IsNotEmpty()
+  /** @deprecated берётся из ResourceType.unit */
+  @IsOptional()
   @IsString()
-  unit: string;
+  unit?: string;
 
   @IsNotEmpty()
   @IsString()
@@ -59,6 +66,11 @@ export class CreateMeterDto {
   @IsOptional()
   @IsBoolean()
   isMain?: boolean;
+
+  @IsOptional()
+  @ValidateIf((_, value) => value !== null && value !== undefined)
+  @IsString()
+  parentMeterId?: string | null;
 
   @IsNotEmpty()
   @IsString()

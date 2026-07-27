@@ -47,7 +47,33 @@ const form = reactive<{
   status: 'active',
 })
 
-const typeOptions = ['Жилой', 'Промышленный', 'Офисный', 'Складской']
+const typeOptions = [
+  {
+    value: 'residential',
+    label: 'Жилой (МКД, частный дом)',
+  },
+  {
+    value: 'commercial',
+    label: 'Коммерческий (офисы, магазины)',
+  },
+  {
+    value: 'industrial',
+    label: 'Промышленный',
+  },
+  {
+    value: 'mixed',
+    label: 'Смешанный',
+  },
+] as const
+
+/** Старые значения typeCode из ранних тестовых данных → коды select */
+const typeCodeLegacyMap: Record<string, string> = {
+  Жилой: 'residential',
+  Офисный: 'commercial',
+  Промышленный: 'industrial',
+  Складской: 'commercial',
+}
+
 const categoryOptions = [
   'Многоквартирный дом',
   'Частный дом',
@@ -59,7 +85,7 @@ const categoryOptions = [
 const rules: FormRules = {
   name: [{ required: true, message: 'Укажите название', trigger: 'blur' }],
   address: [{ required: true, message: 'Укажите адрес', trigger: 'blur' }],
-  typeCode: [{ required: true, message: 'Укажите тип объекта', trigger: 'change' }],
+  typeCode: [{ required: true, message: 'Выберите тип объекта', trigger: 'change' }],
   categoryCode: [
     { required: true, message: 'Укажите категорию', trigger: 'change' },
   ],
@@ -70,10 +96,16 @@ const visible = computed({
   set: (value: boolean) => emit('update:modelValue', value),
 })
 
+function normalizeTypeCode(value: string | undefined | null): string {
+  if (!value) return 'residential'
+  if (typeOptions.some((item) => item.value === value)) return value
+  return typeCodeLegacyMap[value] ?? value
+}
+
 function resetForm() {
   form.name = props.object?.name ?? ''
   form.address = props.object?.address ?? ''
-  form.typeCode = props.object?.typeCode ?? ''
+  form.typeCode = normalizeTypeCode(props.object?.typeCode)
   form.categoryCode = props.object?.categoryCode ?? ''
   form.managerId = props.object?.managerId ?? null
   form.status = props.object?.status ?? 'active'
@@ -166,16 +198,22 @@ async function onSubmit() {
         <el-input v-model="form.address" />
       </el-form-item>
 
-      <el-form-item label="Тип объекта" prop="typeCode">
+      <el-form-item prop="typeCode">
+        <template #label>
+          <span>Тип объекта <span class="required-star">*</span></span>
+        </template>
         <el-select
           v-model="form.typeCode"
           filterable
-          allow-create
-          default-first-option
-          placeholder="Выберите или введите тип"
+          placeholder="Выберите тип объекта"
           style="width: 100%"
         >
-          <el-option v-for="item in typeOptions" :key="item" :label="item" :value="item" />
+          <el-option
+            v-for="item in typeOptions"
+            :key="item.value"
+            :label="item.label"
+            :value="item.value"
+          />
         </el-select>
       </el-form-item>
 
@@ -236,3 +274,10 @@ async function onSubmit() {
     </template>
   </el-dialog>
 </template>
+
+<style scoped>
+.required-star {
+  color: var(--el-color-danger);
+  margin-left: 2px;
+}
+</style>

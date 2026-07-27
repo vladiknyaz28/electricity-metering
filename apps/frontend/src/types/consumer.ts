@@ -5,7 +5,22 @@ export interface ConsumerObjectRef {
 
 export interface ConsumerTariffRef {
   id: string
+  familyId?: string
   name: string
+}
+
+export interface ConsumerMeterParentRef {
+  id: string
+  name: string
+  serialNumber: string
+}
+
+export interface ConsumerMeterRef {
+  id: string
+  name: string
+  serialNumber: string
+  parentMeterId: string | null
+  parentMeter: ConsumerMeterParentRef | null
 }
 
 export interface Consumer {
@@ -23,6 +38,7 @@ export interface Consumer {
   status: string
   tariffId: string | null
   tariff: ConsumerTariffRef | null
+  meters?: ConsumerMeterRef[]
   _count: { meters: number; users: number }
   createdAt: string
   updatedAt: string
@@ -40,10 +56,4 @@ export interface CreateConsumerPayload {
   sharePercent?: number
   tariffId?: string | null
   status?: string
-}
-
-export interface TariffOption {
-  id: string
-  name: string
-  status: string
 }

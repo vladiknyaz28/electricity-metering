@@ -62,8 +62,8 @@ model Consumer {
   sharePercent  Float?
   status        String
 
-  tariffId String?
-  tariff   Tariff? @relation(fields: [tariffId], references: [id], onDelete: SetNull)
+  tariffId String? // familyId серии тарифов (не id конкретной версии)
+  // Связь не через Prisma FK: резолв версии по дате — TariffsService.resolveActiveTariffVersion
 
   meters  Meter[]
   users   User[]
@@ -86,6 +86,8 @@ model Meter {
   name                  String
   serialNumber          String    @unique
   resourceTypeCode      String
+  resourceTypeId        String?
+  resourceType          ResourceType? @relation(fields: [resourceTypeId], references: [id], onDelete: SetNull)
   meterCategoryCode     String
   tariffType            String
   unit                  String
@@ -100,8 +102,25 @@ model Meter {
   secondaryCurrent Int?
   transformerRatio Decimal? @db.Decimal(10, 4)
 
+  parentMeterId String?
+  parentMeter   Meter?  @relation("MeterHierarchy", fields: [parentMeterId], references: [id], onDelete: SetNull)
+  children      Meter[] @relation("MeterHierarchy")
+
   readings MeterReading[]
   charges  Charge[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model ResourceType {
+  id       String  @id @default(cuid())
+  name     String
+  unit     String
+  isSystem Boolean @default(false)
+  status   String  @default("active")
+  meters   Meter[]
+  tariffs  Tariff[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -160,16 +179,22 @@ model Tariff {
 
   name             String
   resourceTypeCode String
-  status           String    @default("active")
-  validFrom        DateTime
-  validTo          DateTime?
+  resourceTypeId   String
+  resourceType     ResourceType @relation(fields: [resourceTypeId], references: [id])
 
-  zones     TariffZone[]
-  consumers Consumer[]
-  charges   Charge[]
+  /// Группирует версии одного логического тарифа. У первой версии familyId = id.
+  familyId  String?
+  status    String    @default("active")
+  validFrom DateTime
+  validTo   DateTime?
+
+  zones   TariffZone[]
+  charges Charge[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+
+  @@index([familyId])
 }
 
 model TariffZone {
@@ -179,7 +204,7 @@ model TariffZone {
   tariff   Tariff @relation(fields: [tariffId], references: [id], onDelete: Cascade)
 
   zoneCode String // 'T1' | 'T2' | 'T3'
-  rate     Float
+  rate     Decimal @db.Decimal(10, 3)
 
   createdAt DateTime @default(now())
 

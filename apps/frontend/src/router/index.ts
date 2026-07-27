@@ -8,6 +8,7 @@ import ObjectsListView from '../views/ObjectsListView.vue'
 import ConsumersListView from '../views/ConsumersListView.vue'
 import MetersListView from '../views/MetersListView.vue'
 import ReadingsListView from '../views/ReadingsListView.vue'
+import TariffsListView from '../views/TariffsListView.vue'
 
 const router = createRouter({
   history: createWebHistory(),
@@ -51,6 +52,12 @@ const router = createRouter({
           name: 'readings',
           component: ReadingsListView,
           meta: { roles: ['admin', 'object_manager', 'consumer'] },
+        },
+        {
+          path: 'tariffs',
+          name: 'tariffs',
+          component: TariffsListView,
+          meta: { roles: ['admin', 'object_manager'] },
         },
       ],
     },

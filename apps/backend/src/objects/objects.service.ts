@@ -7,6 +7,7 @@ import {
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { MetersService } from '../meters/meters.service';
 import { CreateObjectDto } from './dto/create-object.dto';
 import { UpdateObjectDto } from './dto/update-object.dto';
 
@@ -35,7 +36,10 @@ type CurrentUser = {
 
 @Injectable()
 export class ObjectsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly metersService: MetersService,
+  ) {}
 
   async create(dto: CreateObjectDto, currentUser: CurrentUser) {
     const managerId =
@@ -117,86 +121,33 @@ export class ObjectsService {
     periodEnd: string,
     currentUser: CurrentUser,
   ) {
-    if (!periodStart || !periodEnd) {
-      throw new BadRequestException(
-        'Параметры periodStart и periodEnd обязательны (YYYY-MM-DD)',
-      );
-    }
-
     const object = await this.getOrThrow(id);
     this.assertObjectOwnership(object.managerId, currentUser);
 
-    const start = new Date(`${periodStart}T00:00:00.000Z`);
-    const end = new Date(`${periodEnd}T23:59:59.999Z`);
-
-    if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) {
-      throw new BadRequestException('Некорректный формат даты периода');
-    }
-
-    if (start > end) {
-      throw new BadRequestException(
-        'periodStart не может быть позже periodEnd',
-      );
-    }
-
-    const meters = await this.prisma.meter.findMany({
-      where: { objectId: id },
-      include: {
-        consumer: {
-          select: { id: true, name: true },
-        },
-      },
+    const mainMeter = await this.prisma.meter.findFirst({
+      where: { objectId: id, isMain: true },
+      select: { id: true },
     });
 
-    const mainMeter = meters.find((meter) => meter.isMain);
     if (!mainMeter) {
       return { hasMainMeter: false as const };
     }
 
-    const mainConsumption = await this.meterPeriodConsumption(
+    const result = await this.metersService.getMinusovka(
       mainMeter.id,
-      start,
-      end,
-      mainMeter.transformerRatio,
+      periodStart,
+      periodEnd,
+      currentUser,
     );
-
-    const consumerMeters = meters.filter(
-      (meter) => meter.consumerId != null && !meter.isMain,
-    );
-    const breakdown: Array<{
-      meterId: string;
-      meterName: string;
-      consumerName: string | null;
-      consumption: number;
-    }> = [];
-
-    let subConsumersConsumption = 0;
-    for (const meter of consumerMeters) {
-      const consumption = await this.meterPeriodConsumption(
-        meter.id,
-        start,
-        end,
-        meter.transformerRatio,
-      );
-      subConsumersConsumption += consumption;
-      breakdown.push({
-        meterId: meter.id,
-        meterName: meter.name,
-        consumerName: meter.consumer?.name ?? null,
-        consumption,
-      });
-    }
-
-    const minusovka = mainConsumption - subConsumersConsumption;
 
     return {
       hasMainMeter: true as const,
-      mainMeterId: mainMeter.id,
-      mainConsumption,
-      subConsumersConsumption,
-      minusovka,
-      isAnomaly: minusovka < 0,
-      breakdown,
+      mainMeterId: result.parentMeterId,
+      mainConsumption: result.parentConsumption,
+      subConsumersConsumption: result.childrenConsumption,
+      minusovka: result.minusovka,
+      isAnomaly: result.isAnomaly,
+      breakdown: result.breakdown,
     };
   }
 
@@ -265,55 +216,6 @@ export class ObjectsService {
       throw new NotFoundException('Объект не найден');
     }
     return object;
-  }
-
-  private async meterPeriodConsumption(
-    meterId: string,
-    periodStart: Date,
-    periodEnd: Date,
-    transformerRatio: Prisma.Decimal | number | null,
-  ): Promise<number> {
-    const startReading = await this.prisma.meterReading.findFirst({
-      where: {
-        meterId,
-        readingDate: { lte: periodStart },
-      },
-      orderBy: { readingDate: 'desc' },
-    });
-
-    const endReading = await this.prisma.meterReading.findFirst({
-      where: {
-        meterId,
-        readingDate: { lte: periodEnd },
-      },
-      orderBy: { readingDate: 'desc' },
-    });
-
-    if (!startReading || !endReading) {
-      return 0;
-    }
-
-    const startTotal = this.readingTotal(startReading);
-    const endTotal = this.readingTotal(endReading);
-    const raw = endTotal - startTotal;
-    const ratio =
-      transformerRatio == null || transformerRatio === undefined
-        ? 1
-        : Number(transformerRatio);
-
-    return raw * (Number.isFinite(ratio) && ratio > 0 ? ratio : 1);
-  }
-
-  private readingTotal(reading: {
-    valueT1: number;
-    valueT2: number | null;
-    valueT3: number | null;
-  }): number {
-    return (
-      Number(reading.valueT1) +
-      Number(reading.valueT2 ?? 0) +
-      Number(reading.valueT3 ?? 0)
-    );
   }
 
   private async ensureValidManager(managerId?: string | null) {

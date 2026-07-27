@@ -14,6 +14,7 @@ import { Roles } from '../auth/decorators/roles.decorator';
 import { TariffsService } from './tariffs.service';
 import { CreateTariffDto } from './dto/create-tariff.dto';
 import { UpdateTariffDto } from './dto/update-tariff.dto';
+import { NewTariffVersionDto } from './dto/new-tariff-version.dto';
 
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Roles('admin')
@@ -26,10 +27,35 @@ export class TariffsController {
     return this.tariffsService.create(dto);
   }
 
+  @Get('families')
+  @Roles('admin', 'object_manager')
+  findFamilies() {
+    return this.tariffsService.findFamilies();
+  }
+
+  @Delete('families/:familyId')
+  removeFamily(@Param('familyId') familyId: string) {
+    return this.tariffsService.removeFamily(familyId);
+  }
+
   @Get()
   @Roles('admin', 'object_manager')
   findAll() {
     return this.tariffsService.findAll();
+  }
+
+  @Get(':familyId/history')
+  @Roles('admin', 'object_manager')
+  findHistory(@Param('familyId') familyId: string) {
+    return this.tariffsService.findHistory(familyId);
+  }
+
+  @Post(':familyId/new-version')
+  createNewVersion(
+    @Param('familyId') familyId: string,
+    @Body() dto: NewTariffVersionDto,
+  ) {
+    return this.tariffsService.createNewVersion(familyId, dto);
   }
 
   @Get(':id')
@@ -41,11 +67,6 @@ export class TariffsController {
   @Patch(':id')
   update(@Param('id') id: string, @Body() dto: UpdateTariffDto) {
     return this.tariffsService.update(id, dto);
-  }
-
-  @Delete(':id')
-  remove(@Param('id') id: string) {
-    return this.tariffsService.remove(id);
   }
 
   @Patch(':id/assign/:consumerId')

@@ -3,13 +3,18 @@ import { computed, ref, watch } from 'vue'
 import { WarningFilled } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import axios from 'axios'
-import { getMinusovka } from '../api/readings'
+import { getMeterMinusovka, getMinusovka } from '../api/readings'
 import type { EnergyObject } from '../types/object'
-import type { MinusovkaResult } from '../types/reading'
+import type { Meter } from '../types/meter'
+import type {
+  MeterMinusovkaResult,
+  ObjectMinusovkaResult,
+} from '../types/reading'
 
 const props = defineProps<{
   modelValue: boolean
-  object: EnergyObject | null
+  object?: EnergyObject | null
+  meter?: Meter | null
 }>()
 
 const emit = defineEmits<{
@@ -21,9 +26,48 @@ const visible = computed({
   set: (value: boolean) => emit('update:modelValue', value),
 })
 
+const title = computed(() => {
+  if (props.meter) return `Минусовка: ${props.meter.name}`
+  if (props.object) return `Минусовка: ${props.object.name}`
+  return 'Минусовка'
+})
+
 const month = ref<string>('')
 const loading = ref(false)
-const result = ref<MinusovkaResult | null>(null)
+const objectResult = ref<ObjectMinusovkaResult | null>(null)
+const meterResult = ref<MeterMinusovkaResult | null>(null)
+
+const display = computed(() => {
+  if (meterResult.value) {
+    return {
+      mode: 'meter' as const,
+      parentLabel: 'Родительский счётчик',
+      childrenLabel: 'Сумма подчинённых',
+      parentConsumption: meterResult.value.parentConsumption,
+      childrenConsumption: meterResult.value.childrenConsumption,
+      minusovka: meterResult.value.minusovka,
+      isAnomaly: meterResult.value.isAnomaly,
+      breakdown: meterResult.value.breakdown,
+      anomalyText:
+        'Аномалия: сумма подчинённых превышает показания родительского счётчика — проверьте показания',
+    }
+  }
+  if (objectResult.value && objectResult.value.hasMainMeter) {
+    return {
+      mode: 'object' as const,
+      parentLabel: 'Главный счётчик',
+      childrenLabel: 'Сумма подчинённых',
+      parentConsumption: objectResult.value.mainConsumption,
+      childrenConsumption: objectResult.value.subConsumersConsumption,
+      minusovka: objectResult.value.minusovka,
+      isAnomaly: objectResult.value.isAnomaly,
+      breakdown: objectResult.value.breakdown,
+      anomalyText:
+        'Аномалия: сумма подчинённых превышает показания главного счётчика — проверьте показания',
+    }
+  }
+  return null
+})
 
 function periodBounds(monthValue: string): { start: string; end: string } {
   const [year, mon] = monthValue.split('-').map(Number)
@@ -42,23 +86,32 @@ function getErrorMessage(error: unknown): string {
     const message = error.response?.data?.message
     if (Array.isArray(message)) return message.join(', ')
     if (typeof message === 'string') return message
-    if (error.response?.status === 403) return 'Нет доступа к этому объекту'
+    if (error.response?.status === 403) return 'Нет доступа'
   }
   return 'Не удалось рассчитать минусовку'
 }
 
 async function calculate() {
-  if (!props.object || !month.value) {
+  if (!month.value) {
     ElMessage.warning('Выберите месяц')
+    return
+  }
+  if (!props.meter && !props.object) {
+    ElMessage.warning('Не выбран счётчик или объект')
     return
   }
 
   const { start, end } = periodBounds(month.value)
   loading.value = true
+  objectResult.value = null
+  meterResult.value = null
   try {
-    result.value = await getMinusovka(props.object.id, start, end)
+    if (props.meter) {
+      meterResult.value = await getMeterMinusovka(props.meter.id, start, end)
+    } else if (props.object) {
+      objectResult.value = await getMinusovka(props.object.id, start, end)
+    }
   } catch (error) {
-    result.value = null
     ElMessage.error(getErrorMessage(error))
   } finally {
     loading.value = false
@@ -71,7 +124,8 @@ watch(
     if (open) {
       const now = new Date()
       month.value = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`
-      result.value = null
+      objectResult.value = null
+      meterResult.value = null
     }
   },
 )
@@ -80,7 +134,7 @@ watch(
 <template>
   <el-dialog
     v-model="visible"
-    :title="`Минусовка: ${object?.name ?? ''}`"
+    :title="title"
     width="560px"
     destroy-on-close
   >
@@ -97,47 +151,44 @@ watch(
     </div>
 
     <el-empty
-      v-if="!result && !loading"
+      v-if="!display && !loading && !(objectResult && !objectResult.hasMainMeter)"
       description="Выберите месяц и нажмите «Рассчитать»"
     />
 
     <div
-      v-else-if="result && !result.hasMainMeter"
+      v-else-if="objectResult && !objectResult.hasMainMeter"
       class="no-main"
     >
       На объекте не назначен главный счётчик, минусовку посчитать нельзя
     </div>
 
     <div
-      v-else-if="result && result.hasMainMeter"
+      v-else-if="display"
       class="result"
-      :class="{ anomaly: result.isAnomaly }"
+      :class="{ anomaly: display.isAnomaly }"
     >
-      <div v-if="result.isAnomaly" class="anomaly-banner">
+      <div v-if="display.isAnomaly" class="anomaly-banner">
         <el-icon :size="22"><WarningFilled /></el-icon>
-        <span>
-          Аномалия: сумма потребителей превышает показания главного
-          счётчика — проверьте показания
-        </span>
+        <span>{{ display.anomalyText }}</span>
       </div>
 
       <div class="stat">
-        <span class="label">Главный счётчик</span>
-        <span class="value">{{ formatNum(result.mainConsumption) }}</span>
+        <span class="label">{{ display.parentLabel }}</span>
+        <span class="value">{{ formatNum(display.parentConsumption) }}</span>
       </div>
       <div class="stat">
-        <span class="label">Сумма потребителей</span>
-        <span class="value">{{ formatNum(result.subConsumersConsumption) }}</span>
+        <span class="label">{{ display.childrenLabel }}</span>
+        <span class="value">{{ formatNum(display.childrenConsumption) }}</span>
       </div>
       <div class="stat main">
         <span class="label">Минусовка</span>
-        <span class="value big">{{ formatNum(result.minusovka) }}</span>
+        <span class="value big">{{ formatNum(display.minusovka) }}</span>
       </div>
 
-      <div v-if="result.breakdown.length" class="breakdown">
-        <div class="breakdown-title">По счётчикам потребителей</div>
+      <div v-if="display.breakdown.length" class="breakdown">
+        <div class="breakdown-title">По подчинённым счётчикам</div>
         <div
-          v-for="item in result.breakdown"
+          v-for="item in display.breakdown"
           :key="item.meterId"
           class="breakdown-row"
         >

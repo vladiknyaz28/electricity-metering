@@ -67,8 +67,13 @@ export class ReadingsController {
   @Roles('admin', 'object_manager')
   remove(
     @Param('id') id: string,
+    @Query('force') force: string | undefined,
     @CurrentUser() currentUser: AuthUser,
   ) {
-    return this.readingsService.remove(id, currentUser);
+    return this.readingsService.remove(
+      id,
+      currentUser,
+      force === 'true' || force === '1',
+    );
   }
 }
