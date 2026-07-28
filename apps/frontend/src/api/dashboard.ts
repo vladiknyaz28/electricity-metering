@@ -1,9 +1,9 @@
 import api from './client'
 import type {
+  DashboardByConsumer,
+  DashboardByConsumerParams,
   DashboardSummary,
   DashboardSummaryParams,
-  TariffZoneBreakdownParams,
-  TariffZoneBreakdownRow,
 } from '../types/dashboard'
 
 export async function getDashboardSummary(
@@ -15,12 +15,22 @@ export async function getDashboardSummary(
   return data
 }
 
-export async function getTariffZoneBreakdown(
-  params: TariffZoneBreakdownParams,
-): Promise<TariffZoneBreakdownRow[]> {
-  const { data } = await api.get<TariffZoneBreakdownRow[]>(
-    '/dashboard/tariff-zone-breakdown',
-    { params },
+export async function getDashboardByConsumer(
+  params: DashboardByConsumerParams,
+): Promise<DashboardByConsumer[]> {
+  const { data } = await api.get<DashboardByConsumer[]>(
+    '/dashboard/by-consumer',
+    {
+      params: {
+        periodStart: params.periodStart,
+        periodEnd: params.periodEnd,
+        objectId: params.objectId,
+        resourceTypeId: params.resourceTypeId,
+        consumerIds: params.consumerIds?.length
+          ? params.consumerIds.join(',')
+          : undefined,
+      },
+    },
   )
   return data
 }

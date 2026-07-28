@@ -15,6 +15,11 @@ export interface EnergyObject {
   managerId: string | null
   manager: ObjectManager | null
   _count: { meters: number; consumers: number }
+  metersByResource?: Array<{
+    resourceTypeId: string | null
+    resourceName: string
+    count: number
+  }>
   createdAt: string
   updatedAt: string
 }

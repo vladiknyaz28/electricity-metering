@@ -10,6 +10,7 @@ import type { EnergyObject } from '../types/object'
 import ObjectFormDialog from '../components/ObjectFormDialog.vue'
 import EntityCard from '../components/EntityCard.vue'
 import ManagersDrawer from '../components/ManagersDrawer.vue'
+import MetersByResourceLine from '../components/MetersByResourceLine.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -268,9 +269,12 @@ onMounted(async () => {
             <el-link type="primary" @click="goToConsumers(item.id)">
               Потребители: {{ item._count?.consumers ?? 0 }}
             </el-link>
-            <el-link type="primary" @click="goToMeters(item.id)">
-              Счётчики: {{ item._count?.meters ?? 0 }}
-            </el-link>
+            <button type="button" class="meters-btn" @click="goToMeters(item.id)">
+              <MetersByResourceLine
+                :items="item.metersByResource"
+                :fallback-count="item._count?.meters ?? 0"
+              />
+            </button>
           </div>
 
           <template v-if="canManage" #actions>
@@ -362,5 +366,26 @@ onMounted(async () => {
   display: flex;
   justify-content: center;
   margin-top: 1.25rem;
+}
+
+.counts {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  margin-top: 0.65rem;
+}
+
+.meters-btn {
+  border: 0;
+  background: transparent;
+  padding: 0;
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+}
+
+.meters-btn:hover {
+  opacity: 0.85;
+  text-decoration: underline;
 }
 </style>

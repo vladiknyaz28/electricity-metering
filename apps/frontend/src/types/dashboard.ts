@@ -1,9 +1,15 @@
+export interface DashboardKpiResource {
+  resourceTypeId: string | null
+  resourceName: string
+  unit: string
+  consumption: number
+}
+
 export interface DashboardKpi {
   objectsCount: number
   consumersCount: number
   metersCount: number
-  totalConsumption: number
-  totalAmount: number
+  totalConsumptionByResource: DashboardKpiResource[]
 }
 
 export interface DashboardResourceSlice {
@@ -24,6 +30,21 @@ export interface DashboardByObject {
   byResource: DashboardResourceSlice[]
 }
 
+export interface DashboardByResource {
+  resourceTypeId?: string | null
+  resourceType: string
+  unit?: string
+  consumption: number
+  amount: number
+}
+
+export interface DashboardByConsumer {
+  consumerId: string
+  consumerName: string
+  objectName: string
+  byResource: DashboardResourceSlice[]
+}
+
 export interface DashboardAnomaly {
   meterId: string
   meterName: string
@@ -37,6 +58,7 @@ export interface DashboardSummary {
   kpi: DashboardKpi
   consumptionTrend: DashboardTrendPoint[]
   byObject: DashboardByObject[]
+  byResourceType: DashboardByResource[]
   anomalies: DashboardAnomaly[]
 }
 
@@ -47,16 +69,6 @@ export interface DashboardSummaryParams {
   resourceTypeId?: string
 }
 
-export interface TariffZoneSlice {
-  zone: 'T1' | 'T2' | 'T3'
-  consumption: number
-  amount: number
+export interface DashboardByConsumerParams extends DashboardSummaryParams {
+  consumerIds?: string[]
 }
-
-export interface TariffZoneBreakdownRow {
-  resourceTypeId: string
-  resourceName: string
-  zones: TariffZoneSlice[]
-}
-
-export type TariffZoneBreakdownParams = DashboardSummaryParams

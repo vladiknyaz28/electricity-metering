@@ -20,6 +20,14 @@ const objectInclude = {
       status: true,
     },
   },
+  meters: {
+    select: {
+      id: true,
+      resourceTypeId: true,
+      resourceTypeCode: true,
+      resourceType: { select: { id: true, name: true } },
+    },
+  },
   _count: {
     select: {
       meters: true,
@@ -49,25 +57,28 @@ export class ObjectsService {
       await this.ensureValidManager(managerId);
     }
 
-    return this.prisma.object.create({
-      data: {
-        name: dto.name,
-        address: dto.address,
-        typeCode: dto.typeCode,
-        categoryCode: dto.categoryCode,
-        status: dto.status ?? 'active',
-        managerId,
-      },
-      include: objectInclude,
-    });
+    return this.withMetersByResource(
+      await this.prisma.object.create({
+        data: {
+          name: dto.name,
+          address: dto.address,
+          typeCode: dto.typeCode,
+          categoryCode: dto.categoryCode,
+          status: dto.status ?? 'active',
+          managerId,
+        },
+        include: objectInclude,
+      }),
+    );
   }
 
   async findAll(currentUser: CurrentUser) {
-    return this.prisma.object.findMany({
+    const objects = await this.prisma.object.findMany({
       where: this.scopeWhere(currentUser),
       include: objectInclude,
       orderBy: { createdAt: 'desc' },
     });
+    return objects.map((object) => this.withMetersByResource(object));
   }
 
   async findOne(id: string, currentUser: CurrentUser) {
@@ -79,10 +90,43 @@ export class ObjectsService {
     if (!object) {
       throw new NotFoundException('Объект не найден');
     }
-
     this.assertObjectOwnership(object.managerId, currentUser);
+    return this.withMetersByResource(object);
+  }
 
-    return object;
+  private withMetersByResource<
+    T extends {
+      meters: Array<{
+        resourceTypeId: string | null;
+        resourceTypeCode: string;
+        resourceType: { id: string; name: string } | null;
+      }>;
+    },
+  >(object: T) {
+    const map = new Map<
+      string,
+      { resourceTypeId: string | null; resourceName: string; count: number }
+    >();
+    for (const meter of object.meters) {
+      const resourceTypeId = meter.resourceTypeId;
+      const resourceName =
+        meter.resourceType?.name || meter.resourceTypeCode || 'Ресурс';
+      const key = resourceTypeId ?? resourceName;
+      const prev = map.get(key) ?? {
+        resourceTypeId,
+        resourceName,
+        count: 0,
+      };
+      prev.count += 1;
+      map.set(key, prev);
+    }
+    const { meters: _meters, ...rest } = object;
+    return {
+      ...rest,
+      metersByResource: [...map.values()].sort((a, b) =>
+        a.resourceName.localeCompare(b.resourceName, 'ru'),
+      ),
+    };
   }
 
   async update(id: string, dto: UpdateObjectDto, currentUser: CurrentUser) {
@@ -97,22 +141,26 @@ export class ObjectsService {
       await this.ensureValidManager(data.managerId);
     }
 
-    return this.prisma.object.update({
-      where: { id },
-      data,
-      include: objectInclude,
-    });
+    return this.withMetersByResource(
+      await this.prisma.object.update({
+        where: { id },
+        data,
+        include: objectInclude,
+      }),
+    );
   }
 
   async remove(id: string, currentUser: CurrentUser) {
     const existing = await this.getOrThrow(id);
     this.assertObjectOwnership(existing.managerId, currentUser);
 
-    return this.prisma.object.update({
-      where: { id },
-      data: { status: 'inactive' },
-      include: objectInclude,
-    });
+    return this.withMetersByResource(
+      await this.prisma.object.update({
+        where: { id },
+        data: { status: 'inactive' },
+        include: objectInclude,
+      }),
+    );
   }
 
   async getMinusovka(

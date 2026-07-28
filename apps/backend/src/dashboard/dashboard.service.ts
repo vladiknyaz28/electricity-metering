@@ -71,19 +71,22 @@ export class DashboardService {
       query.resourceTypeId,
     );
 
-    const periodStats = await this.sumMetersForPeriod(
+    const totalConsumptionByResource = await this.buildTotalByResource(
       aggMeters,
       periodStart,
       periodEnd,
     );
 
     const trendRange = this.resolveTrendMonths(periodStart, periodEnd);
-    const consumptionTrend = await this.buildTrend(
-      aggMeters,
-      trendRange,
-    );
+    const consumptionTrend = await this.buildTrend(aggMeters, trendRange);
 
     const byObject = await this.buildByObject(
+      aggMeters,
+      periodStart,
+      periodEnd,
+    );
+
+    const byResourceType = await this.buildByResourceType(
       aggMeters,
       periodStart,
       periodEnd,
@@ -96,108 +99,138 @@ export class DashboardService {
         objectsCount,
         consumersCount,
         metersCount,
-        totalConsumption: periodStats.consumption,
-        totalAmount: periodStats.amount,
+        totalConsumptionByResource,
       },
       consumptionTrend,
       byObject,
+      byResourceType,
       anomalies,
     };
   }
 
-  async getTariffZoneBreakdown(query: SummaryQuery, currentUser: CurrentUser) {
+  async getByConsumer(query: SummaryQuery & { consumerIds?: string | string[] }, currentUser: CurrentUser) {
     const { periodStart, periodEnd } = this.resolvePeriod(
       query.periodStart,
       query.periodEnd,
     );
 
+    const consumerIdFilter = this.parseIdList(query.consumerIds);
+
     const meters = await this.prisma.meter.findMany({
-      where: this.meterScopeWhere(
-        currentUser,
-        query.objectId,
-        query.resourceTypeId,
-      ),
+      where: {
+        ...this.meterScopeWhere(
+          currentUser,
+          query.objectId,
+          query.resourceTypeId,
+        ),
+        consumerId: consumerIdFilter
+          ? { in: consumerIdFilter }
+          : { not: null },
+      },
       select: {
         id: true,
         name: true,
+        serialNumber: true,
+        objectId: true,
         consumerId: true,
         tariffId: true,
+        isMain: true,
+        object: { select: { name: true } },
+        consumer: { select: { id: true, name: true } },
         resourceTypeId: true,
         resourceTypeCode: true,
-        resourceType: { select: { id: true, name: true } },
+        resourceType: { select: { name: true, unit: true } },
       },
     });
 
-    type ZoneAgg = {
-      resourceTypeId: string;
-      resourceName: string;
-      zones: { T1: { consumption: number; amount: number }; T2: { consumption: number; amount: number }; T3: { consumption: number; amount: number } };
-    };
-
-    const map = new Map<string, ZoneAgg>();
+    const map = new Map<
+      string,
+      {
+        consumerId: string;
+        consumerName: string;
+        objectName: string;
+        byResource: Map<
+          string,
+          {
+            resourceTypeId: string | null;
+            resourceName: string;
+            consumption: number;
+            amount: number;
+          }
+        >;
+        totalConsumption: number;
+      }
+    >();
 
     for (const meter of meters) {
-      const resourceTypeId =
-        meter.resourceTypeId ?? meter.resourceType?.id ?? 'unknown';
-      const resourceName =
-        meter.resourceType?.name || meter.resourceTypeCode || 'Ресурс';
+      if (!meter.consumerId || !meter.consumer) continue;
 
-      const detailed =
-        await this.metersService.calculateMeterConsumptionDetailed(
-          meter.id,
-          periodStart,
-          periodEnd,
-        );
-      if (!detailed.hasData) continue;
-
-      const zoneAmounts = await this.zoneAmountsForMeter(
-        {
-          consumerId: meter.consumerId,
-          tariffId: meter.tariffId,
-        },
-        periodEnd,
-        detailed.byZone,
-      );
-
-      const prev = map.get(resourceTypeId) ?? {
-        resourceTypeId,
-        resourceName,
-        zones: {
-          T1: { consumption: 0, amount: 0 },
-          T2: { consumption: 0, amount: 0 },
-          T3: { consumption: 0, amount: 0 },
-        },
+      const agg: AggMeter = {
+        id: meter.id,
+        name: meter.name,
+        serialNumber: meter.serialNumber,
+        objectId: meter.objectId,
+        objectName: meter.object.name,
+        resourceTypeId: meter.resourceTypeId,
+        resourceTypeName:
+          meter.resourceType?.name || meter.resourceTypeCode || 'Ресурс',
+        resourceTypeUnit: meter.resourceType?.unit || '',
+        consumerId: meter.consumerId,
+        tariffId: meter.tariffId,
+        isMain: meter.isMain,
       };
 
-      for (const zone of ['T1', 'T2', 'T3'] as const) {
-        prev.zones[zone].consumption = this.round4(
-          prev.zones[zone].consumption + detailed.byZone[zone],
-        );
-        prev.zones[zone].amount = this.round2(
-          prev.zones[zone].amount + zoneAmounts[zone],
-        );
-      }
-      map.set(resourceTypeId, prev);
+      const stats = await this.meterPeriodMoney(agg, periodStart, periodEnd);
+      if (stats.consumption === 0 && stats.amount === 0) continue;
+
+      const row = map.get(meter.consumerId) ?? {
+        consumerId: meter.consumerId,
+        consumerName: meter.consumer.name,
+        objectName: meter.object.name,
+        byResource: new Map(),
+        totalConsumption: 0,
+      };
+
+      const rKey = meter.resourceTypeId ?? agg.resourceTypeName;
+      const prev = row.byResource.get(rKey) ?? {
+        resourceTypeId: meter.resourceTypeId,
+        resourceName: agg.resourceTypeName,
+        consumption: 0,
+        amount: 0,
+      };
+      prev.consumption = this.round4(prev.consumption + stats.consumption);
+      prev.amount = this.round2(prev.amount + stats.amount);
+      row.byResource.set(rKey, prev);
+      row.totalConsumption = this.round4(
+        row.totalConsumption + stats.consumption,
+      );
+      map.set(meter.consumerId, row);
     }
 
-    return [...map.values()]
+    let rows = [...map.values()]
       .map((row) => ({
-        resourceTypeId: row.resourceTypeId,
-        resourceName: row.resourceName,
-        zones: (['T1', 'T2', 'T3'] as const)
-          .filter(
-            (z) =>
-              Math.abs(row.zones[z].consumption) > 0 ||
-              Math.abs(row.zones[z].amount) > 0,
-          )
-          .map((z) => ({
-            zone: z,
-            consumption: row.zones[z].consumption,
-            amount: row.zones[z].amount,
-          })),
+        consumerId: row.consumerId,
+        consumerName: row.consumerName,
+        objectName: row.objectName,
+        byResource: [...row.byResource.values()].sort((a, b) =>
+          a.resourceName.localeCompare(b.resourceName, 'ru'),
+        ),
+        totalConsumption: row.totalConsumption,
       }))
-      .filter((row) => row.zones.length > 0)
-      .sort((a, b) => a.resourceName.localeCompare(b.resourceName, 'ru'));
+      .sort((a, b) => b.totalConsumption - a.totalConsumption);
+
+    if (!consumerIdFilter) {
+      rows = rows.slice(0, 30);
+    }
+
+    return rows.map(({ totalConsumption: _t, ...rest }) => rest);
+  }
+
+  private parseIdList(value?: string | string[]): string[] | undefined {
+    if (value == null) return undefined;
+    const raw = Array.isArray(value) ? value : value.split(',');
+    const ids = raw.map((item) => item.trim()).filter(Boolean);
+    return ids.length ? [...new Set(ids)] : undefined;
   }
 
   private resolvePeriod(startRaw?: string, endRaw?: string) {
@@ -318,6 +351,82 @@ export class DashboardService {
       }
     }
     return result;
+  }
+
+  private async buildTotalByResource(
+    meters: AggMeter[],
+    periodStart: Date,
+    periodEnd: Date,
+  ) {
+    const map = new Map<
+      string,
+      {
+        resourceTypeId: string | null;
+        resourceName: string;
+        unit: string;
+        consumption: number;
+      }
+    >();
+
+    for (const meter of meters) {
+      const stats = await this.meterPeriodMoney(meter, periodStart, periodEnd);
+      if (stats.consumption === 0) continue;
+      const key = meter.resourceTypeId ?? meter.resourceTypeName;
+      const prev = map.get(key) ?? {
+        resourceTypeId: meter.resourceTypeId,
+        resourceName: meter.resourceTypeName,
+        unit: meter.resourceTypeUnit,
+        consumption: 0,
+      };
+      prev.consumption = this.round4(prev.consumption + stats.consumption);
+      if (!prev.unit && meter.resourceTypeUnit) {
+        prev.unit = meter.resourceTypeUnit;
+      }
+      map.set(key, prev);
+    }
+
+    return [...map.values()].sort((a, b) =>
+      a.resourceName.localeCompare(b.resourceName, 'ru'),
+    );
+  }
+
+  private async buildByResourceType(
+    meters: AggMeter[],
+    periodStart: Date,
+    periodEnd: Date,
+  ) {
+    const map = new Map<
+      string,
+      {
+        resourceTypeId: string | null;
+        resourceType: string;
+        unit: string;
+        consumption: number;
+        amount: number;
+      }
+    >();
+
+    for (const meter of meters) {
+      const stats = await this.meterPeriodMoney(meter, periodStart, periodEnd);
+      if (stats.consumption === 0 && stats.amount === 0) continue;
+      const key = meter.resourceTypeId ?? meter.resourceTypeName;
+      const prev = map.get(key) ?? {
+        resourceTypeId: meter.resourceTypeId,
+        resourceType: meter.resourceTypeName,
+        unit: meter.resourceTypeUnit,
+        consumption: 0,
+        amount: 0,
+      };
+      prev.consumption = this.round4(prev.consumption + stats.consumption);
+      prev.amount = this.round2(prev.amount + stats.amount);
+      if (!prev.unit && meter.resourceTypeUnit) {
+        prev.unit = meter.resourceTypeUnit;
+      }
+      map.set(key, prev);
+    }
+
+    return [...map.values()]
+      .sort((a, b) => b.consumption - a.consumption);
   }
 
   private async sumMetersForPeriod(
@@ -452,39 +561,6 @@ export class DashboardService {
       })
       .sort((a, b) => b.totalConsumption - a.totalConsumption)
       .map(({ totalConsumption: _t, ...rest }) => rest);
-  }
-
-  private async zoneAmountsForMeter(
-    meter: { consumerId: string | null; tariffId: string | null },
-    onDate: Date,
-    volumes: { T1: number; T2: number; T3: number },
-  ): Promise<{ T1: number; T2: number; T3: number }> {
-    const empty = { T1: 0, T2: 0, T3: 0 };
-    const familyId = await this.metersService.resolveMeterTariffFamilyId(meter);
-    if (!familyId) return empty;
-
-    const tariff = await this.tariffsService.resolveActiveTariffVersion(
-      familyId,
-      onDate,
-    );
-    if (!tariff) return empty;
-
-    const rate = (code: string): number | null => {
-      const zone = tariff.zones.find((z) => z.zoneCode === code);
-      if (!zone) return null;
-      const n = Number(zone.rate);
-      return Number.isFinite(n) ? n : null;
-    };
-
-    const r1 = rate('T1');
-    const r2 = rate('T2');
-    const r3 = rate('T3');
-
-    return {
-      T1: r1 == null ? 0 : this.round2(volumes.T1 * r1),
-      T2: r2 == null ? 0 : this.round2(volumes.T2 * r2),
-      T3: r3 == null ? 0 : this.round2(volumes.T3 * r3),
-    };
   }
 
   private async meterPeriodMoney(

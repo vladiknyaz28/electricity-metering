@@ -24,6 +24,9 @@ const consumerInclude = {
       name: true,
       serialNumber: true,
       parentMeterId: true,
+      resourceTypeId: true,
+      resourceTypeCode: true,
+      resourceType: { select: { id: true, name: true } },
       parentMeter: {
         select: {
           id: true,
@@ -199,29 +202,40 @@ export class ConsumerService {
     return { message: 'Потребитель удалён окончательно' };
   }
 
-  private async withTariff<T extends { tariffId: string | null }>(consumer: T) {
-    if (!consumer.tariffId) {
-      return { ...consumer, tariff: null };
+  private async withTariff<
+    T extends {
+      tariffId: string | null;
+      meters?: Array<{
+        resourceTypeId?: string | null;
+        resourceTypeCode?: string;
+        resourceType?: { id: string; name: string } | null;
+      }>;
+    },
+  >(consumer: T) {
+    const withMeters = this.attachMetersByResource(consumer);
+
+    if (!withMeters.tariffId) {
+      return { ...withMeters, tariff: null };
     }
 
     const version = await this.tariffsService.resolveActiveTariffVersion(
-      consumer.tariffId,
+      withMeters.tariffId,
       new Date(),
     );
 
     if (!version) {
       return {
-        ...consumer,
+        ...withMeters,
         tariff: {
-          id: consumer.tariffId,
+          id: withMeters.tariffId,
           name: 'Тариф не найден',
-          familyId: consumer.tariffId,
+          familyId: withMeters.tariffId,
         },
       };
     }
 
     return {
-      ...consumer,
+      ...withMeters,
       tariff: {
         id: version.familyId ?? version.id,
         familyId: version.familyId ?? version.id,
@@ -231,6 +245,41 @@ export class ConsumerService {
         validFrom: version.validFrom,
         validTo: version.validTo,
       },
+    };
+  }
+
+  private attachMetersByResource<
+    T extends {
+      meters?: Array<{
+        resourceTypeId?: string | null;
+        resourceTypeCode?: string;
+        resourceType?: { id: string; name: string } | null;
+      }>;
+    },
+  >(consumer: T) {
+    const meters = consumer.meters ?? [];
+    const map = new Map<
+      string,
+      { resourceTypeId: string | null; resourceName: string; count: number }
+    >();
+    for (const meter of meters) {
+      const resourceTypeId = meter.resourceTypeId ?? null;
+      const resourceName =
+        meter.resourceType?.name || meter.resourceTypeCode || 'Ресурс';
+      const key = resourceTypeId ?? resourceName;
+      const prev = map.get(key) ?? {
+        resourceTypeId,
+        resourceName,
+        count: 0,
+      };
+      prev.count += 1;
+      map.set(key, prev);
+    }
+    return {
+      ...consumer,
+      metersByResource: [...map.values()].sort((a, b) =>
+        a.resourceName.localeCompare(b.resourceName, 'ru'),
+      ),
     };
   }
 

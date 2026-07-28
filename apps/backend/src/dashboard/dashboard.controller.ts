@@ -41,21 +41,23 @@ export class DashboardController {
     );
   }
 
-  @Get('tariff-zone-breakdown')
+  @Get('by-consumer')
   @Roles('admin', 'object_manager', 'consumer', 'auditor')
-  getTariffZoneBreakdown(
+  getByConsumer(
     @Query('periodStart') periodStart: string,
     @Query('periodEnd') periodEnd: string,
     @Query('objectId') objectId: string | undefined,
     @Query('resourceTypeId') resourceTypeId: string | undefined,
+    @Query('consumerIds') consumerIds: string | string[] | undefined,
     @CurrentUser() currentUser: AuthUser,
   ) {
-    return this.dashboardService.getTariffZoneBreakdown(
+    return this.dashboardService.getByConsumer(
       {
         periodStart,
         periodEnd,
         objectId: objectId || undefined,
         resourceTypeId: resourceTypeId || undefined,
+        consumerIds,
       },
       currentUser,
     );

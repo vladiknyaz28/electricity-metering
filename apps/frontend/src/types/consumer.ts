@@ -21,6 +21,9 @@ export interface ConsumerMeterRef {
   serialNumber: string
   parentMeterId: string | null
   parentMeter: ConsumerMeterParentRef | null
+  resourceTypeId?: string | null
+  resourceTypeCode?: string
+  resourceType?: { id: string; name: string } | null
 }
 
 export interface Consumer {
@@ -39,6 +42,11 @@ export interface Consumer {
   tariffId: string | null
   tariff: ConsumerTariffRef | null
   meters?: ConsumerMeterRef[]
+  metersByResource?: Array<{
+    resourceTypeId: string | null
+    resourceName: string
+    count: number
+  }>
   _count: { meters: number; users: number }
   createdAt: string
   updatedAt: string

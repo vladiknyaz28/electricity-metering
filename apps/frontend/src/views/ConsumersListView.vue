@@ -15,6 +15,7 @@ import type { EnergyObject } from '../types/object'
 import type { Consumer, ConsumerMeterRef } from '../types/consumer'
 import ConsumerFormDialog from '../components/ConsumerFormDialog.vue'
 import EntityCard from '../components/EntityCard.vue'
+import MetersByResourceLine from '../components/MetersByResourceLine.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -343,9 +344,12 @@ onMounted(async () => {
           <div class="line">Тариф: {{ item.tariff?.name || 'Не назначен' }}</div>
 
           <div class="counts">
-            <el-link type="primary" @click="goToMeters(item.id)">
-              Счётчики: {{ item._count?.meters ?? item.meters?.length ?? 0 }}
-            </el-link>
+            <button type="button" class="meters-btn" @click="goToMeters(item.id)">
+              <MetersByResourceLine
+                :items="item.metersByResource"
+                :fallback-count="item._count?.meters ?? item.meters?.length ?? 0"
+              />
+            </button>
             <span>Пользователи: {{ item._count?.users ?? 0 }}</span>
           </div>
 
@@ -489,5 +493,26 @@ onMounted(async () => {
   display: flex;
   justify-content: center;
   margin-top: 1.25rem;
+}
+
+.counts {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  margin-top: 0.65rem;
+}
+
+.meters-btn {
+  border: 0;
+  background: transparent;
+  padding: 0;
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+}
+
+.meters-btn:hover {
+  opacity: 0.85;
+  text-decoration: underline;
 }
 </style>

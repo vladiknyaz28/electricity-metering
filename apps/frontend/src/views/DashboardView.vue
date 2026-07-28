@@ -2,7 +2,7 @@
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { use } from 'echarts/core'
 import { CanvasRenderer } from 'echarts/renderers'
-import { LineChart, BarChart } from 'echarts/charts'
+import { BarChart, PieChart } from 'echarts/charts'
 import {
   GridComponent,
   TooltipComponent,
@@ -13,29 +13,36 @@ import {
   OfficeBuilding,
   User,
   Odometer,
-  DataLine,
 } from '@element-plus/icons-vue'
 import {
+  getDashboardByConsumer,
   getDashboardSummary,
-  getTariffZoneBreakdown,
 } from '../api/dashboard'
 import { getObjects } from '../api/objects'
+import { getConsumers } from '../api/consumers'
 import { getResourceTypes } from '../api/resourceTypes'
 import type {
   DashboardAnomaly,
+  DashboardByConsumer,
   DashboardByObject,
+  DashboardByResource,
+  DashboardKpiResource,
   DashboardSummary,
-  DashboardTrendPoint,
-  TariffZoneBreakdownRow,
 } from '../types/dashboard'
 import type { EnergyObject } from '../types/object'
+import type { Consumer } from '../types/consumer'
 import type { ResourceType } from '../types/resourceType'
-import { resourceTypeColor } from '../utils/resourceColors'
+import {
+  defaultUnitForResource,
+  resourceTypeColor,
+  resourceTypeSoftBg,
+  resourceTypeTitle,
+} from '../utils/resourceColors'
 
 use([
   CanvasRenderer,
-  LineChart,
   BarChart,
+  PieChart,
   GridComponent,
   TooltipComponent,
   LegendComponent,
@@ -44,34 +51,31 @@ use([
 type ChartMetric = 'units' | 'money'
 type ObjectSort = 'consumption' | 'name'
 
-const ZONE_COLORS = {
-  T1: '#5b6fd8',
-  T2: '#8b9aef',
-  T3: '#c5cdf7',
-} as const
-
 const loadingKpi = ref(false)
-const loadingTrend = ref(false)
+const loadingPie = ref(false)
 const loadingObjects = ref(false)
-const loadingZones = ref(false)
+const loadingConsumers = ref(false)
 
 const objects = ref<EnergyObject[]>([])
+const consumers = ref<Consumer[]>([])
 const resourceTypes = ref<ResourceType[]>([])
 
-const kpiSummary = ref<DashboardSummary | null>(null)
-const trendPoints = ref<DashboardTrendPoint[]>([])
-const byObjectRows = ref<DashboardByObject[]>([])
-const zoneRows = ref<TariffZoneBreakdownRow[]>([])
+const kpi = ref<DashboardSummary['kpi'] | null>(null)
 const anomalies = ref<DashboardAnomaly[]>([])
+const pieRows = ref<DashboardByResource[]>([])
+const byObjectRows = ref<DashboardByObject[]>([])
+const byConsumerRows = ref<DashboardByConsumer[]>([])
 
-const trendMetric = ref<ChartMetric>('units')
+const pieMetric = ref<ChartMetric>('units')
 const objectMetric = ref<ChartMetric>('units')
-const zoneMetric = ref<ChartMetric>('units')
+const consumerMetric = ref<ChartMetric>('units')
 const objectSort = ref<ObjectSort>('consumption')
 
 function defaultPeriod(): [string, string] {
   const end = new Date()
-  const start = new Date(Date.UTC(end.getUTCFullYear(), end.getUTCMonth() - 11, 1))
+  const start = new Date(
+    Date.UTC(end.getUTCFullYear(), end.getUTCMonth() - 11, 1),
+  )
   return [toIsoDate(start), toIsoDate(end)]
 }
 
@@ -79,10 +83,9 @@ function toIsoDate(d: Date) {
   return d.toISOString().slice(0, 10)
 }
 
-const trendFilters = reactive({
+const pieFilters = reactive({
   period: defaultPeriod() as [string, string],
   objectId: '' as string,
-  resourceTypeIds: [] as string[],
 })
 
 const objectFilters = reactive({
@@ -90,10 +93,10 @@ const objectFilters = reactive({
   resourceTypeIds: [] as string[],
 })
 
-const zoneFilters = reactive({
+const consumerFilters = reactive({
   period: defaultPeriod() as [string, string],
   objectId: '' as string,
-  resourceTypeId: '' as string,
+  consumerIds: [] as string[],
 })
 
 function formatNum(value: number | null | undefined, digits = 0) {
@@ -116,44 +119,6 @@ function formatDate(value: string) {
   return new Date(value).toLocaleDateString('ru-RU')
 }
 
-const kpiCards = computed(() => {
-  const kpi = kpiSummary.value?.kpi
-  return [
-    {
-      key: 'objects',
-      label: 'Объекты',
-      value: formatNum(kpi?.objectsCount),
-      icon: OfficeBuilding,
-    },
-    {
-      key: 'consumers',
-      label: 'Потребители',
-      value: formatNum(kpi?.consumersCount),
-      icon: User,
-    },
-    {
-      key: 'meters',
-      label: 'Счётчики',
-      value: formatNum(kpi?.metersCount),
-      icon: Odometer,
-    },
-    {
-      key: 'consumption',
-      label: 'Общий расход за период',
-      value: formatNum(kpi?.totalConsumption, 2),
-      hint:
-        kpi?.totalAmount != null
-          ? `Сумма: ${formatMoney(kpi.totalAmount)} ₽`
-          : undefined,
-      icon: DataLine,
-    },
-  ]
-})
-
-const activeResourceTypes = computed(() =>
-  resourceTypes.value.filter((t) => t.status === 'active'),
-)
-
 function metricValue(
   slice: { consumption: number; amount: number },
   metric: ChartMetric,
@@ -161,75 +126,81 @@ function metricValue(
   return metric === 'money' ? slice.amount : slice.consumption
 }
 
-const trendResourceNames = computed(() => {
-  const names = new Set<string>()
-  for (const point of trendPoints.value) {
-    for (const row of point.byResource) {
-      if (
-        trendFilters.resourceTypeIds.length === 0 ||
-        (row.resourceTypeId &&
-          trendFilters.resourceTypeIds.includes(row.resourceTypeId))
-      ) {
-        names.add(row.resourceName)
-      }
-    }
-  }
-  return [...names].sort((a, b) => a.localeCompare(b, 'ru'))
+const countCards = computed(() => [
+  {
+    key: 'objects',
+    label: 'Объекты',
+    value: formatNum(kpi.value?.objectsCount),
+    icon: OfficeBuilding,
+  },
+  {
+    key: 'consumers',
+    label: 'Потребители',
+    value: formatNum(kpi.value?.consumersCount),
+    icon: User,
+  },
+  {
+    key: 'meters',
+    label: 'Счётчики',
+    value: formatNum(kpi.value?.metersCount),
+    icon: Odometer,
+  },
+])
+
+const resourceKpiCards = computed(
+  (): DashboardKpiResource[] => kpi.value?.totalConsumptionByResource ?? [],
+)
+
+const activeResourceTypes = computed(() =>
+  resourceTypes.value.filter((t) => t.status === 'active'),
+)
+
+const consumerOptions = computed(() => {
+  const list = consumerFilters.objectId
+    ? consumers.value.filter((c) => c.objectId === consumerFilters.objectId)
+    : consumers.value
+  return [...list].sort((a, b) => a.name.localeCompare(b.name, 'ru'))
 })
 
-const trendOption = computed(() => {
-  const names = trendResourceNames.value
-  const useMoney = trendMetric.value === 'money'
+const pieOption = computed(() => {
+  const rows = pieRows.value
+  const useMoney = pieMetric.value === 'money'
   return {
+    color: rows.map((r) => resourceTypeColor(r.resourceType)),
     tooltip: {
-      trigger: 'axis',
-      formatter: (params: Array<{ seriesName: string; value: number; marker: string; axisValue: string }>) => {
-        if (!Array.isArray(params) || !params.length) return ''
-        const lines = params.map(
-          (p) =>
-            `${p.marker}${p.seriesName}: ${
-              useMoney ? `${formatMoney(p.value)} ₽` : formatNum(p.value, 2)
-            }`,
-        )
-        return `${params[0].axisValue}<br/>${lines.join('<br/>')}`
+      trigger: 'item',
+      formatter: (params: {
+        name?: string
+        dataIndex?: number
+        percent?: number
+      }) => {
+        const row = rows[params.dataIndex ?? 0]
+        if (!row) return params.name ?? ''
+        const unit = row.unit || defaultUnitForResource(row.resourceType) || 'ед.'
+        const pct =
+          params.percent != null ? ` (${params.percent.toFixed(1)}%)` : ''
+        return `${row.resourceType}: ${formatNum(row.consumption, 2)} ${unit} · ${formatMoney(row.amount)} ₽${pct}`
       },
     },
     legend: { bottom: 0, textStyle: { color: '#6b7280' } },
-    grid: { left: 52, right: 24, top: 24, bottom: 56 },
-    xAxis: {
-      type: 'category',
-      data: trendPoints.value.map((p) => p.period),
-      axisLine: { lineStyle: { color: '#c5cad6' } },
-      axisLabel: { color: '#6b7280' },
-    },
-    yAxis: {
-      type: 'value',
-      name: useMoney ? '₽' : 'ед.',
-      axisLabel: { color: '#6b7280' },
-      splitLine: { lineStyle: { color: '#eef0f4' } },
-    },
-    series: names.map((name) => ({
-      name,
-      type: 'line',
-      smooth: true,
-      symbol: 'circle',
-      symbolSize: 6,
-      itemStyle: { color: resourceTypeColor(name) },
-      lineStyle: { color: resourceTypeColor(name), width: 2 },
-      areaStyle: { color: resourceTypeColor(name), opacity: 0.08 },
-      data: trendPoints.value.map((point) => {
-        const row = point.byResource.find((r) => r.resourceName === name)
-        if (!row) return 0
-        if (
-          trendFilters.resourceTypeIds.length > 0 &&
-          row.resourceTypeId &&
-          !trendFilters.resourceTypeIds.includes(row.resourceTypeId)
-        ) {
-          return 0
-        }
-        return metricValue(row, trendMetric.value)
-      }),
-    })),
+    series: [
+      {
+        type: 'pie',
+        radius: ['42%', '68%'],
+        center: ['50%', '46%'],
+        avoidLabelOverlap: true,
+        itemStyle: { borderRadius: 6, borderColor: '#fff', borderWidth: 2 },
+        label: {
+          color: '#4b5563',
+          formatter: '{b}\n{d}%',
+        },
+        data: rows.map((r) => ({
+          name: r.resourceType,
+          value: useMoney ? r.amount : r.consumption,
+          itemStyle: { color: resourceTypeColor(r.resourceType) },
+        })),
+      },
+    ],
   }
 })
 
@@ -274,7 +245,14 @@ const objectBarOption = computed(() => {
     tooltip: {
       trigger: 'axis',
       axisPointer: { type: 'shadow' },
-      formatter: (params: Array<{ seriesName: string; value: number; marker: string; dataIndex: number }>) => {
+      formatter: (
+        params: Array<{
+          seriesName: string
+          value: number
+          marker: string
+          dataIndex: number
+        }>,
+      ) => {
         if (!Array.isArray(params) || !params.length) return ''
         const obj = rows[params[0].dataIndex]
         if (!obj) return ''
@@ -283,7 +261,7 @@ const objectBarOption = computed(() => {
           .map(
             (p) =>
               `${p.marker}${p.seriesName}: ${
-                useMoney ? `${formatMoney(p.value)} ₽` : formatNum(p.value, 2)
+                useMoney ? `${formatMoney(p.value)} ₽` : `${formatNum(p.value, 2)} ед.`
               }`,
           )
         const total = obj.byResource.reduce(
@@ -292,14 +270,14 @@ const objectBarOption = computed(() => {
         )
         lines.push(
           `<b>Итого: ${
-            useMoney ? `${formatMoney(total)} ₽` : formatNum(total, 2)
+            useMoney ? `${formatMoney(total)} ₽` : `${formatNum(total, 2)} ед.`
           }</b>`,
         )
         return `${obj.objectName}<br/>${lines.join('<br/>')}`
       },
     },
     legend: { bottom: 0, textStyle: { color: '#6b7280' } },
-    grid: { left: 52, right: 24, top: 24, bottom: 64 },
+    grid: { left: 52, right: 24, top: 16, bottom: 56 },
     xAxis: {
       type: 'category',
       data: rows.map((r) => r.objectName),
@@ -316,14 +294,15 @@ const objectBarOption = computed(() => {
       axisLabel: { color: '#6b7280' },
       splitLine: { lineStyle: { color: '#eef0f4' } },
     },
-    series: names.map((name) => ({
+    series: names.map((name, index) => ({
       name,
       type: 'bar',
       stack: 'total',
       barMaxWidth: 48,
       itemStyle: {
         color: resourceTypeColor(name),
-        borderRadius: [0, 0, 0, 0],
+        borderRadius:
+          index === names.length - 1 ? [6, 6, 0, 0] : [0, 0, 0, 0],
       },
       data: rows.map((obj) => {
         const slice = obj.byResource.find((r) => r.resourceName === name)
@@ -333,15 +312,30 @@ const objectBarOption = computed(() => {
   }
 })
 
-const zoneBarOption = computed(() => {
-  const rows = zoneRows.value
-  const useMoney = zoneMetric.value === 'money'
-  const zones = ['T1', 'T2', 'T3'] as const
+const consumerResourceNames = computed(() => {
+  const names = new Set<string>()
+  for (const row of byConsumerRows.value) {
+    for (const r of row.byResource) names.add(r.resourceName)
+  }
+  return [...names].sort((a, b) => a.localeCompare(b, 'ru'))
+})
+
+const consumerBarOption = computed(() => {
+  const rows = [...byConsumerRows.value].reverse()
+  const names = consumerResourceNames.value
+  const useMoney = consumerMetric.value === 'money'
   return {
     tooltip: {
       trigger: 'axis',
       axisPointer: { type: 'shadow' },
-      formatter: (params: Array<{ seriesName: string; value: number; marker: string; dataIndex: number }>) => {
+      formatter: (
+        params: Array<{
+          seriesName: string
+          value: number
+          marker: string
+          dataIndex: number
+        }>,
+      ) => {
         if (!Array.isArray(params) || !params.length) return ''
         const row = rows[params[0].dataIndex]
         if (!row) return ''
@@ -350,55 +344,70 @@ const zoneBarOption = computed(() => {
           .map(
             (p) =>
               `${p.marker}${p.seriesName}: ${
-                useMoney ? `${formatMoney(p.value)} ₽` : formatNum(p.value, 2)
+                useMoney ? `${formatMoney(p.value)} ₽` : `${formatNum(p.value, 2)} ед.`
               }`,
           )
-        return `${row.resourceName}<br/>${lines.join('<br/>')}`
+        const total = row.byResource.reduce(
+          (s, r) => s + metricValue(r, consumerMetric.value),
+          0,
+        )
+        lines.push(
+          `<b>Итого: ${
+            useMoney ? `${formatMoney(total)} ₽` : `${formatNum(total, 2)} ед.`
+          }</b>`,
+        )
+        return `${row.consumerName} · ${row.objectName}<br/>${lines.join('<br/>')}`
       },
     },
     legend: { bottom: 0, textStyle: { color: '#6b7280' } },
-    grid: { left: 52, right: 24, top: 24, bottom: 56 },
-    xAxis: {
-      type: 'category',
-      data: rows.map((r) => r.resourceName),
-      axisLabel: { color: '#6b7280' },
-      axisLine: { lineStyle: { color: '#c5cad6' } },
+    grid: {
+      left: 140,
+      right: 24,
+      top: 16,
+      bottom: 56,
     },
     yAxis: {
+      type: 'category',
+      data: rows.map((r) => r.consumerName),
+      axisLabel: { color: '#6b7280', width: 120, overflow: 'truncate' },
+      axisLine: { lineStyle: { color: '#c5cad6' } },
+    },
+    xAxis: {
       type: 'value',
       name: useMoney ? '₽' : 'ед.',
       axisLabel: { color: '#6b7280' },
       splitLine: { lineStyle: { color: '#eef0f4' } },
     },
-    series: zones.map((zone) => ({
-      name: zone,
+    series: names.map((name, index) => ({
+      name,
       type: 'bar',
-      stack: 'zones',
-      barMaxWidth: 56,
-      itemStyle: { color: ZONE_COLORS[zone] },
+      stack: 'total',
+      barMaxWidth: 22,
+      itemStyle: {
+        color: resourceTypeColor(name),
+        borderRadius:
+          index === names.length - 1 ? [0, 6, 6, 0] : [0, 0, 0, 0],
+      },
       data: rows.map((row) => {
-        const z = row.zones.find((item) => item.zone === zone)
-        if (!z) return 0
-        return useMoney ? z.amount : z.consumption
+        const slice = row.byResource.find((r) => r.resourceName === name)
+        return slice ? metricValue(slice, consumerMetric.value) : 0
       }),
     })),
   }
 })
 
-const hasTrend = computed(() =>
-  trendPoints.value.some((p) =>
-    p.byResource.some((r) => r.consumption !== 0 || r.amount !== 0),
-  ),
-)
+const hasPie = computed(() => pieRows.value.length > 0)
 const hasObjects = computed(() => filteredObjectRows.value.length > 0)
-const hasZones = computed(() => zoneRows.value.length > 0)
+const hasConsumers = computed(() => byConsumerRows.value.length > 0)
 
 async function loadFilterOptions() {
-  const [objectsData, typesData] = await Promise.all([
+  const [objectsData, consumersData, typesData] = await Promise.all([
     getObjects().catch(() => [] as EnergyObject[]),
+    getConsumers().catch(() => [] as Consumer[]),
     getResourceTypes().catch(() => [] as ResourceType[]),
   ])
   objects.value = objectsData
+  consumers.value = consumersData
   resourceTypes.value = typesData
 }
 
@@ -407,30 +416,30 @@ async function loadKpiAndAnomalies() {
   try {
     const [periodStart, periodEnd] = defaultPeriod()
     const data = await getDashboardSummary({ periodStart, periodEnd })
-    kpiSummary.value = data
+    kpi.value = data.kpi
     anomalies.value = data.anomalies ?? []
   } catch {
-    kpiSummary.value = null
+    kpi.value = null
     anomalies.value = []
   } finally {
     loadingKpi.value = false
   }
 }
 
-async function loadTrend() {
-  loadingTrend.value = true
+async function loadPie() {
+  loadingPie.value = true
   try {
-    const [periodStart, periodEnd] = trendFilters.period
+    const [periodStart, periodEnd] = pieFilters.period
     const data = await getDashboardSummary({
       periodStart,
       periodEnd,
-      objectId: trendFilters.objectId || undefined,
+      objectId: pieFilters.objectId || undefined,
     })
-    trendPoints.value = data.consumptionTrend ?? []
+    pieRows.value = data.byResourceType ?? []
   } catch {
-    trendPoints.value = []
+    pieRows.value = []
   } finally {
-    loadingTrend.value = false
+    loadingPie.value = false
   }
 }
 
@@ -447,54 +456,40 @@ async function loadObjectsChart() {
   }
 }
 
-async function loadZones() {
-  loadingZones.value = true
+async function loadConsumersChart() {
+  loadingConsumers.value = true
   try {
-    const [periodStart, periodEnd] = zoneFilters.period
-    zoneRows.value = await getTariffZoneBreakdown({
+    const [periodStart, periodEnd] = consumerFilters.period
+    byConsumerRows.value = await getDashboardByConsumer({
       periodStart,
       periodEnd,
-      objectId: zoneFilters.objectId || undefined,
-      resourceTypeId: zoneFilters.resourceTypeId || undefined,
+      objectId: consumerFilters.objectId || undefined,
+      consumerIds: consumerFilters.consumerIds.length
+        ? consumerFilters.consumerIds
+        : undefined,
     })
   } catch {
-    zoneRows.value = []
+    byConsumerRows.value = []
   } finally {
-    loadingZones.value = false
+    loadingConsumers.value = false
   }
 }
 
-watch(
-  () => [trendFilters.period, trendFilters.objectId],
-  () => {
-    void loadTrend()
-  },
-  { deep: true },
-)
-
+watch(pieFilters, () => void loadPie(), { deep: true })
 watch(
   () => objectFilters.period,
-  () => {
-    void loadObjectsChart()
-  },
+  () => void loadObjectsChart(),
   { deep: true },
 )
-
-watch(
-  zoneFilters,
-  () => {
-    void loadZones()
-  },
-  { deep: true },
-)
+watch(consumerFilters, () => void loadConsumersChart(), { deep: true })
 
 onMounted(async () => {
   await loadFilterOptions()
   await Promise.all([
     loadKpiAndAnomalies(),
-    loadTrend(),
+    loadPie(),
     loadObjectsChart(),
-    loadZones(),
+    loadConsumersChart(),
   ])
 })
 </script>
@@ -506,178 +501,201 @@ onMounted(async () => {
       <p class="subtitle">Сводка по объектам, потреблению и показаниям</p>
     </div>
 
-    <section v-loading="loadingKpi" class="kpi-row">
-      <div v-for="card in kpiCards" :key="card.key" class="card kpi-card">
-        <div class="kpi-icon">
-          <el-icon :size="22"><component :is="card.icon" /></el-icon>
+    <section v-loading="loadingKpi" class="kpi-block">
+      <div class="kpi-row counts">
+        <div v-for="card in countCards" :key="card.key" class="card kpi-card">
+          <div class="kpi-icon">
+            <el-icon :size="22"><component :is="card.icon" /></el-icon>
+          </div>
+          <div>
+            <div class="kpi-value">{{ card.value }}</div>
+            <div class="kpi-label">{{ card.label }}</div>
+          </div>
         </div>
-        <div>
-          <div class="kpi-value">{{ card.value }}</div>
-          <div class="kpi-label">{{ card.label }}</div>
-          <div v-if="card.hint" class="kpi-hint">{{ card.hint }}</div>
+      </div>
+
+      <div v-if="resourceKpiCards.length" class="kpi-row resources">
+        <div
+          v-for="card in resourceKpiCards"
+          :key="card.resourceTypeId || card.resourceName"
+          class="card kpi-card resource-kpi"
+          :style="{
+            borderLeftColor: resourceTypeColor(card.resourceName),
+            background: resourceTypeSoftBg(card.resourceName),
+          }"
+        >
+          <div
+            class="resource-kpi-icon"
+            :style="{ color: resourceTypeColor(card.resourceName) }"
+          >
+            {{ resourceTypeTitle(card.resourceName).split(' ')[0] }}
+          </div>
+          <div>
+            <div class="kpi-label">Общий расход · {{ card.resourceName }}</div>
+            <div
+              class="kpi-value resource-value"
+              :style="{ color: resourceTypeColor(card.resourceName) }"
+            >
+              {{ formatNum(card.consumption, 2) }}
+              <span class="unit">{{ card.unit || defaultUnitForResource(card.resourceName) }}</span>
+            </div>
+          </div>
         </div>
       </div>
     </section>
 
-    <section v-loading="loadingTrend" class="card chart-card">
-      <div class="chart-head">
-        <h2>Динамика потребления</h2>
-        <el-radio-group v-model="trendMetric" size="small">
-          <el-radio-button label="units">В единицах</el-radio-button>
-          <el-radio-button label="money">В рублях</el-radio-button>
-        </el-radio-group>
+    <section v-loading="loadingPie" class="card chart-card">
+      <div class="chart-header">
+        <div class="chart-title-row">
+          <h2>Расходы по категориям</h2>
+          <el-radio-group v-model="pieMetric" size="small">
+            <el-radio-button label="units">В единицах</el-radio-button>
+            <el-radio-button label="money">В рублях</el-radio-button>
+          </el-radio-group>
+        </div>
+        <div class="chart-filters">
+          <el-date-picker
+            v-model="pieFilters.period"
+            type="daterange"
+            value-format="YYYY-MM-DD"
+            range-separator="—"
+            start-placeholder="Начало"
+            end-placeholder="Конец"
+            :clearable="false"
+          />
+          <el-select
+            v-model="pieFilters.objectId"
+            clearable
+            placeholder="Все объекты"
+            style="width: 200px"
+          >
+            <el-option
+              v-for="item in objects"
+              :key="item.id"
+              :label="item.name"
+              :value="item.id"
+            />
+          </el-select>
+        </div>
       </div>
-      <VChart
-        v-if="hasTrend"
-        class="chart"
-        :option="trendOption"
-        autoresize
-      />
-      <el-empty v-else description="Нет данных за период" :image-size="72" />
-      <div class="chart-filters">
-        <el-date-picker
-          v-model="trendFilters.period"
-          type="daterange"
-          value-format="YYYY-MM-DD"
-          range-separator="—"
-          start-placeholder="Начало"
-          end-placeholder="Конец"
-          :clearable="false"
-        />
-        <el-select
-          v-model="trendFilters.objectId"
-          clearable
-          placeholder="Все объекты"
-          style="width: 200px"
-        >
-          <el-option
-            v-for="item in objects"
-            :key="item.id"
-            :label="item.name"
-            :value="item.id"
-          />
-        </el-select>
-        <el-select
-          v-model="trendFilters.resourceTypeIds"
-          multiple
-          collapse-tags
-          collapse-tags-tooltip
-          clearable
-          placeholder="Все ресурсы"
-          style="min-width: 220px"
-        >
-          <el-option
-            v-for="item in activeResourceTypes"
-            :key="item.id"
-            :label="item.name"
-            :value="item.id"
-          />
-        </el-select>
+      <div class="chart-body">
+        <VChart v-if="hasPie" class="chart" :option="pieOption" autoresize />
+        <el-empty v-else description="Нет данных за период" :image-size="72" />
       </div>
     </section>
 
     <section v-loading="loadingObjects" class="card chart-card">
-      <div class="chart-head">
-        <h2>Потребление по объектам</h2>
-        <el-radio-group v-model="objectMetric" size="small">
-          <el-radio-button label="units">В единицах</el-radio-button>
-          <el-radio-button label="money">В рублях</el-radio-button>
-        </el-radio-group>
-      </div>
-      <VChart
-        v-if="hasObjects"
-        class="chart chart-tall"
-        :option="objectBarOption"
-        autoresize
-      />
-      <el-empty v-else description="Нет данных за период" :image-size="72" />
-      <div class="chart-filters">
-        <el-date-picker
-          v-model="objectFilters.period"
-          type="daterange"
-          value-format="YYYY-MM-DD"
-          range-separator="—"
-          start-placeholder="Начало"
-          end-placeholder="Конец"
-          :clearable="false"
-        />
-        <el-select
-          v-model="objectFilters.resourceTypeIds"
-          multiple
-          collapse-tags
-          collapse-tags-tooltip
-          clearable
-          placeholder="Все ресурсы"
-          style="min-width: 220px"
-        >
-          <el-option
-            v-for="item in activeResourceTypes"
-            :key="item.id"
-            :label="item.name"
-            :value="item.id"
+      <div class="chart-header">
+        <div class="chart-title-row">
+          <h2>Потребление по объектам</h2>
+          <el-radio-group v-model="objectMetric" size="small">
+            <el-radio-button label="units">В единицах</el-radio-button>
+            <el-radio-button label="money">В рублях</el-radio-button>
+          </el-radio-group>
+        </div>
+        <div class="chart-filters">
+          <el-date-picker
+            v-model="objectFilters.period"
+            type="daterange"
+            value-format="YYYY-MM-DD"
+            range-separator="—"
+            start-placeholder="Начало"
+            end-placeholder="Конец"
+            :clearable="false"
           />
-        </el-select>
-        <el-select
-          v-model="objectSort"
-          style="width: 220px"
-        >
-          <el-option label="По убыванию расхода" value="consumption" />
-          <el-option label="По названию" value="name" />
-        </el-select>
+          <el-select
+            v-model="objectFilters.resourceTypeIds"
+            multiple
+            collapse-tags
+            collapse-tags-tooltip
+            clearable
+            placeholder="Все ресурсы"
+            style="min-width: 220px"
+          >
+            <el-option
+              v-for="item in activeResourceTypes"
+              :key="item.id"
+              :label="item.name"
+              :value="item.id"
+            />
+          </el-select>
+          <el-select v-model="objectSort" style="width: 220px">
+            <el-option label="По убыванию расхода" value="consumption" />
+            <el-option label="По названию" value="name" />
+          </el-select>
+        </div>
+      </div>
+      <div class="chart-body">
+        <VChart
+          v-if="hasObjects"
+          class="chart chart-tall"
+          :option="objectBarOption"
+          autoresize
+        />
+        <el-empty v-else description="Нет данных за период" :image-size="72" />
       </div>
     </section>
 
-    <section v-loading="loadingZones" class="card chart-card">
-      <div class="chart-head">
-        <h2>Структура расхода по тарифным зонам</h2>
-        <el-radio-group v-model="zoneMetric" size="small">
-          <el-radio-button label="units">В единицах</el-radio-button>
-          <el-radio-button label="money">В рублях</el-radio-button>
-        </el-radio-group>
+    <section v-loading="loadingConsumers" class="card chart-card">
+      <div class="chart-header">
+        <div class="chart-title-row">
+          <h2>Расходы по потребителям</h2>
+          <el-radio-group v-model="consumerMetric" size="small">
+            <el-radio-button label="units">В единицах</el-radio-button>
+            <el-radio-button label="money">В рублях</el-radio-button>
+          </el-radio-group>
+        </div>
+        <div class="chart-filters">
+          <el-date-picker
+            v-model="consumerFilters.period"
+            type="daterange"
+            value-format="YYYY-MM-DD"
+            range-separator="—"
+            start-placeholder="Начало"
+            end-placeholder="Конец"
+            :clearable="false"
+          />
+          <el-select
+            v-model="consumerFilters.objectId"
+            clearable
+            placeholder="Все объекты"
+            style="width: 200px"
+            @change="consumerFilters.consumerIds = []"
+          >
+            <el-option
+              v-for="item in objects"
+              :key="item.id"
+              :label="item.name"
+              :value="item.id"
+            />
+          </el-select>
+          <el-select
+            v-model="consumerFilters.consumerIds"
+            multiple
+            filterable
+            collapse-tags
+            collapse-tags-tooltip
+            clearable
+            placeholder="Все / топ потребители"
+            style="min-width: 260px"
+          >
+            <el-option
+              v-for="item in consumerOptions"
+              :key="item.id"
+              :label="`${item.name} · ${item.object?.name || ''}`"
+              :value="item.id"
+            />
+          </el-select>
+        </div>
       </div>
-      <VChart
-        v-if="hasZones"
-        class="chart chart-tall"
-        :option="zoneBarOption"
-        autoresize
-      />
-      <el-empty v-else description="Нет данных за период" :image-size="72" />
-      <div class="chart-filters">
-        <el-date-picker
-          v-model="zoneFilters.period"
-          type="daterange"
-          value-format="YYYY-MM-DD"
-          range-separator="—"
-          start-placeholder="Начало"
-          end-placeholder="Конец"
-          :clearable="false"
+      <div class="chart-body">
+        <VChart
+          v-if="hasConsumers"
+          class="chart chart-consumers"
+          :option="consumerBarOption"
+          autoresize
         />
-        <el-select
-          v-model="zoneFilters.objectId"
-          clearable
-          placeholder="Все объекты"
-          style="width: 200px"
-        >
-          <el-option
-            v-for="item in objects"
-            :key="item.id"
-            :label="item.name"
-            :value="item.id"
-          />
-        </el-select>
-        <el-select
-          v-model="zoneFilters.resourceTypeId"
-          clearable
-          placeholder="Все ресурсы"
-          style="width: 200px"
-        >
-          <el-option
-            v-for="item in activeResourceTypes"
-            :key="item.id"
-            :label="item.name"
-            :value="item.id"
-          />
-        </el-select>
+        <el-empty v-else description="Нет данных за период" :image-size="72" />
       </div>
     </section>
 
@@ -709,11 +727,7 @@ onMounted(async () => {
           </template>
         </el-table-column>
       </el-table>
-      <el-empty
-        v-else
-        description="Аномалий не найдено"
-        :image-size="72"
-      />
+      <el-empty v-else description="Аномалий не найдено" :image-size="72" />
     </section>
   </div>
 </template>
@@ -741,11 +755,14 @@ onMounted(async () => {
 .card {
   background: #fff;
   border-radius: 12px;
-  box-shadow: 0 1px 3px rgba(31, 41, 55, 0.06), 0 1px 2px rgba(31, 41, 55, 0.04);
+  box-shadow:
+    0 1px 3px rgba(31, 41, 55, 0.06),
+    0 1px 2px rgba(31, 41, 55, 0.04);
   padding: 1rem 1.15rem;
 }
 
-.card h2 {
+.card h2,
+.section-title {
   margin: 0;
   font-size: 1rem;
   font-weight: 600;
@@ -753,38 +770,36 @@ onMounted(async () => {
 }
 
 .section-title {
-  margin-bottom: 0.85rem !important;
-}
-
-.chart-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.75rem;
-  flex-wrap: wrap;
   margin-bottom: 0.85rem;
 }
 
-.chart-filters {
+.kpi-block {
   display: flex;
-  flex-wrap: wrap;
-  gap: 0.65rem;
-  align-items: center;
-  margin-top: 0.85rem;
-  padding-top: 0.85rem;
-  border-top: 1px solid #eef0f4;
+  flex-direction: column;
+  gap: 0.85rem;
 }
 
 .kpi-row {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 1rem;
+}
+
+.kpi-row.counts {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.kpi-row.resources {
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
 }
 
 .kpi-card {
   display: flex;
   gap: 0.85rem;
   align-items: flex-start;
+}
+
+.resource-kpi {
+  border-left: 4px solid;
 }
 
 .kpi-icon {
@@ -799,11 +814,22 @@ onMounted(async () => {
   flex-shrink: 0;
 }
 
+.resource-kpi-icon {
+  font-size: 1.4rem;
+  line-height: 1;
+}
+
 .kpi-value {
   font-size: 1.45rem;
   font-weight: 700;
   color: #111827;
   line-height: 1.2;
+}
+
+.resource-value .unit {
+  font-size: 0.85rem;
+  font-weight: 600;
+  margin-left: 0.25rem;
 }
 
 .kpi-label {
@@ -812,10 +838,26 @@ onMounted(async () => {
   font-size: 0.9rem;
 }
 
-.kpi-hint {
-  margin-top: 0.2rem;
-  color: #5b6fd8;
-  font-size: 0.82rem;
+.chart-header {
+  padding-bottom: 0.85rem;
+  margin-bottom: 0.85rem;
+  border-bottom: 1px solid #eef0f4;
+}
+
+.chart-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.65rem;
+}
+
+.chart-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.65rem;
+  align-items: center;
 }
 
 .chart {
@@ -825,6 +867,10 @@ onMounted(async () => {
 
 .chart-tall {
   height: 340px;
+}
+
+.chart-consumers {
+  height: 380px;
 }
 
 .anomaly-table :deep(.el-table__row) {
@@ -840,14 +886,8 @@ onMounted(async () => {
   font-weight: 600;
 }
 
-@media (max-width: 1100px) {
-  .kpi-row {
-    grid-template-columns: 1fr 1fr;
-  }
-}
-
-@media (max-width: 720px) {
-  .kpi-row {
+@media (max-width: 900px) {
+  .kpi-row.counts {
     grid-template-columns: 1fr;
   }
 }
