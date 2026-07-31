@@ -1,9 +1,28 @@
+# Зависимости
 node_modules/
+apps/backend/node_modules/
+apps/frontend/node_modules/
+
+# Сборки
 dist/
+apps/backend/dist/
+apps/frontend/dist/
+
+# Переменные окружения
 .env
-.env.*.local
-*.log
-.DS_Store
+.env.local
+apps/backend/.env
+apps/frontend/.env
+
+# Prisma
+apps/backend/prisma/migrations/.gitkeep
+
+# IDE / ОС
 .vscode/
-.angular/
-.tmp-screenshots/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Логи
+*.log
+npm-debug.log*
