@@ -26,3 +26,9 @@ Thumbs.db
 # Логи
 *.log
 npm-debug.log*
+
+
+# Temporary local files
+~$*.docx
+tmp-query.sql
+electricity-metering.docx
