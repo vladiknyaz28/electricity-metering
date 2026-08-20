@@ -13,12 +13,12 @@ const password = ref('')
 const errorMessage = ref('')
 const loading = ref(false)
 
-async function onSubmit() {
+  async function onSubmit() {
   errorMessage.value = ''
   loading.value = true
 
   try {
-    await authStore.login(email.value, password.value)
+    await authStore.login(email.value.trim(), password.value)
     await authStore.fetchProfile()
 
     const redirect =
@@ -30,6 +30,13 @@ async function onSubmit() {
     if (axios.isAxiosError(error)) {
       if (error.response?.status === 401) {
         errorMessage.value = 'Неверный email или пароль'
+      } else if (error.response?.status === 400) {
+        const msg = error.response.data?.message
+        errorMessage.value = Array.isArray(msg)
+          ? msg.join(', ')
+          : typeof msg === 'string'
+            ? msg
+            : 'Проверьте формат email и пароля (мин. 6 символов)'
       } else if (!error.response) {
         errorMessage.value = 'Не удаётся подключиться к серверу'
       } else {

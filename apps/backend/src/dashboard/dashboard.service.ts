@@ -563,6 +563,13 @@ export class DashboardService {
       .map(({ totalConsumption: _t, ...rest }) => rest);
   }
 
+  /**
+   * Gross consumption + amount for a dashboard aggregation meter.
+   * Children are NOT subtracted here: resolveAggregationMeters already picks
+   * isMain (or roots) to avoid hierarchy double-counting. Subtracting children
+   * again turned object totals into минусовка/ОДН residual (can be negative),
+   * which emptied pie charts (ECharts ignores negative pie values).
+   */
   private async meterPeriodMoney(
     meter: AggMeter,
     periodStart: Date,
@@ -579,57 +586,15 @@ export class DashboardService {
       return { consumption: 0, amount: 0 };
     }
 
-    const children = await this.metersService.findMinusovkaChildren({
-      id: meter.id,
-      objectId: meter.objectId,
-      isMain: meter.isMain,
-      resourceTypeId: meter.resourceTypeId,
-    });
-
-    let zoneVolumes = { ...detailed.byZone };
-    const isParent = children.length > 0;
-    let netConsumption = detailed.consumption;
-
-    if (isParent) {
-      let childrenSum = 0;
-      for (const child of children) {
-        const childResult =
-          await this.metersService.calculateMeterConsumption(
-            child.id,
-            periodStart,
-            periodEnd,
-          );
-        childrenSum = this.round4(childrenSum + childResult.consumption);
-      }
-      const residual = this.round4(detailed.consumption - childrenSum);
-      netConsumption = residual;
-
-      const multi =
-        Math.abs(detailed.byZone.T2) > 0 || Math.abs(detailed.byZone.T3) > 0;
-      if (!multi) {
-        zoneVolumes = { T1: residual, T2: 0, T3: 0 };
-      } else {
-        const denom = detailed.byZone.T2 + detailed.byZone.T3;
-        const shareT2 = denom > 0 ? detailed.byZone.T2 / denom : 0.5;
-        const shareT3 = denom > 0 ? detailed.byZone.T3 / denom : 0.5;
-        zoneVolumes = {
-          T1: 0,
-          T2: this.round4(residual * shareT2),
-          T3: this.round4(residual * shareT3),
-        };
-      }
-    }
-
     const amount = await this.amountFromZones(
       meter,
       periodEnd,
-      zoneVolumes,
-      isParent,
+      detailed.byZone,
+      false,
     );
 
     return {
-      // С детьми того же ресурса — остаток (net); иначе полный расход
-      consumption: netConsumption,
+      consumption: detailed.consumption,
       amount,
     };
   }

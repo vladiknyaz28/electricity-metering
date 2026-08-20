@@ -53,6 +53,7 @@ const editForm = reactive({
   fullName: '',
   email: '',
   status: 'active',
+  password: '',
 })
 
 const passwordForm = reactive({
@@ -76,6 +77,22 @@ const editRules: FormRules = {
   email: [
     { required: true, message: 'Укажите email', trigger: 'blur' },
     { type: 'email', message: 'Некорректный email', trigger: 'blur' },
+  ],
+  password: [
+    {
+      validator: (_rule, value: string, callback) => {
+        if (!value) {
+          callback()
+          return
+        }
+        if (value.length < 6) {
+          callback(new Error('Минимум 6 символов'))
+          return
+        }
+        callback()
+      },
+      trigger: 'blur',
+    },
   ],
 }
 
@@ -136,6 +153,7 @@ function openEdit(manager: AuthUser) {
   editForm.fullName = manager.fullName
   editForm.email = manager.email
   editForm.status = manager.status
+  editForm.password = ''
   editVisible.value = true
 }
 
@@ -175,12 +193,25 @@ async function submitEdit() {
 
   saving.value = true
   try {
-    await updateUser(editing.value.id, {
+    const payload: {
+      fullName: string
+      email: string
+      status: string
+      password?: string
+    } = {
       fullName: editForm.fullName.trim(),
       email: editForm.email.trim(),
       status: editForm.status,
-    })
-    ElMessage.success('Менеджер обновлён')
+    }
+    if (editForm.password.trim()) {
+      payload.password = editForm.password
+    }
+    await updateUser(editing.value.id, payload)
+    ElMessage.success(
+      editForm.password.trim()
+        ? 'Менеджер и пароль обновлены'
+        : 'Менеджер обновлён',
+    )
     editVisible.value = false
     await loadData()
     emit('changed')
@@ -368,6 +399,14 @@ watch(
             <el-option label="Активен" value="active" />
             <el-option label="Неактивен" value="inactive" />
           </el-select>
+        </el-form-item>
+        <el-form-item label="Новый пароль (необязательно)" prop="password">
+          <el-input
+            v-model="editForm.password"
+            type="password"
+            show-password
+            placeholder="Оставьте пустым, чтобы не менять"
+          />
         </el-form-item>
       </el-form>
       <template #footer>

@@ -163,10 +163,13 @@ const consumerOptions = computed(() => {
 })
 
 const pieOption = computed(() => {
-  const rows = pieRows.value
+  const rows = pieRows.value.filter(
+    (r) => (pieMetric.value === 'money' ? r.amount : r.consumption) > 0,
+  )
   const useMoney = pieMetric.value === 'money'
+  // Цвета только в series.data[].itemStyle: top-level `color` в vue-echarts v8
+  // может попасть в replaceMerge (это не main type компонента ECharts).
   return {
-    color: rows.map((r) => resourceTypeColor(r.resourceType)),
     tooltip: {
       trigger: 'item',
       formatter: (params: {
@@ -203,6 +206,12 @@ const pieOption = computed(() => {
     ],
   }
 })
+
+const hasPie = computed(() =>
+  pieRows.value.some(
+    (r) => (pieMetric.value === 'money' ? r.amount : r.consumption) > 0,
+  ),
+)
 
 const filteredObjectRows = computed(() => {
   let rows = byObjectRows.value.map((obj) => {
@@ -396,7 +405,6 @@ const consumerBarOption = computed(() => {
   }
 })
 
-const hasPie = computed(() => pieRows.value.length > 0)
 const hasObjects = computed(() => filteredObjectRows.value.length > 0)
 const hasConsumers = computed(() => byConsumerRows.value.length > 0)
 
@@ -579,8 +587,21 @@ onMounted(async () => {
         </div>
       </div>
       <div class="chart-body">
-        <VChart v-if="hasPie" class="chart" :option="pieOption" autoresize />
-        <el-empty v-else description="Нет данных за период" :image-size="72" />
+        <VChart
+          v-if="hasPie"
+          class="chart"
+          :option="pieOption"
+          autoresize
+        />
+        <el-empty
+          v-else
+          :description="
+            pieRows.length
+              ? 'Нет положительного расхода за период (возможна минусовка)'
+              : 'Нет данных за период'
+          "
+          :image-size="72"
+        />
       </div>
     </section>
 
