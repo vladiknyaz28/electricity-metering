@@ -647,6 +647,17 @@ export class DashboardService {
     since.setUTCDate(since.getUTCDate() - 90);
     const sinceDay = this.startOfUtcDay(since);
 
+    type DashboardAnomalyEvent = {
+      meterId: string;
+      meterName: string;
+      objectName: string;
+      period: string;
+      minusovka: number;
+      readingDate: string;
+      anomalyType?: string;
+      anomalyNote?: string | null;
+    };
+
     const candidates = await this.prisma.meter.findMany({
       where: this.meterScopeWhere(currentUser, objectId),
       select: {
@@ -660,15 +671,9 @@ export class DashboardService {
       },
     });
 
-    const anomalies: Array<{
-      meterId: string;
-      meterName: string;
-      objectName: string;
-      period: string;
-      minusovka: number;
-      readingDate: string;
-    }> = [];
+    const anomalies: DashboardAnomalyEvent[] = [];
 
+    // 1) Иерархическая минусовка (прежний алгоритм, последние 90 дней)
     for (const meter of candidates) {
       const children = await this.metersService.findMinusovkaChildren(meter);
       if (children.length === 0) continue;
@@ -718,12 +723,77 @@ export class DashboardService {
           period: dateIso.slice(0, 7),
           minusovka,
           readingDate: dateIso,
+          anomalyType: 'minusovka',
+          anomalyNote:
+            'Суммарный расход дочерних счётчиков превышает расход родительского прибора.',
         });
       }
     }
 
-    return anomalies
-      .sort((a, b) => Math.abs(b.minusovka) - Math.abs(a.minusovka))
+    // 2) Аномалии показаний (MeterReading.anomalyType ≠ none)
+    const flaggedReadings = await this.prisma.meterReading.findMany({
+      where: {
+        readingDate: { gte: sinceDay },
+        AND: [
+          { anomalyType: { not: 'none' } },
+          { anomalyType: { not: '' } },
+        ],
+        meter: this.meterScopeWhere(currentUser, objectId),
+      },
+      select: {
+        periodCode: true,
+        readingDate: true,
+        anomalyType: true,
+        anomalyNote: true,
+        meter: {
+          select: {
+            id: true,
+            name: true,
+            serialNumber: true,
+            object: { select: { name: true } },
+          },
+        },
+      },
+    });
+
+    for (const reading of flaggedReadings) {
+      const dateIso = reading.readingDate.toISOString().slice(0, 10);
+      anomalies.push({
+        meterId: reading.meter.id,
+        meterName: reading.meter.serialNumber || reading.meter.name,
+        objectName: reading.meter.object.name,
+        period: reading.periodCode,
+        minusovka: 0,
+        readingDate: dateIso,
+        anomalyType: reading.anomalyType,
+        anomalyNote: reading.anomalyNote,
+      });
+    }
+
+    const rank = (type?: string) => {
+      if (type === 'high_consumption') return 0;
+      if (type === 'negative_consumption') return 1;
+      if (type === 'minusovka') return 2;
+      return 3;
+    };
+
+    const deduped: DashboardAnomalyEvent[] = [];
+    const seen = new Set<string>();
+    for (const item of anomalies) {
+      const key = `${item.meterId}|${item.readingDate}|${item.anomalyType ?? ''}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      deduped.push(item);
+    }
+
+    return deduped
+      .sort((a, b) => {
+        const byType = rank(a.anomalyType) - rank(b.anomalyType);
+        if (byType !== 0) return byType;
+        const byDate = b.readingDate.localeCompare(a.readingDate);
+        if (byDate !== 0) return byDate;
+        return Math.abs(b.minusovka) - Math.abs(a.minusovka);
+      })
       .slice(0, 10);
   }
 

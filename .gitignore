@@ -14,6 +14,10 @@ apps/frontend/dist/
 apps/backend/.env
 apps/frontend/.env
 
+# Demo local environment
+apps/backend/.env.demo
+apps/backend/.env.demo.local
+
 # Prisma
 apps/backend/prisma/migrations/.gitkeep
 
