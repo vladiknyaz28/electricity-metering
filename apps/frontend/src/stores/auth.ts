@@ -4,6 +4,13 @@ import api from '../api/client'
 import type { AuthUser, LoginResponse } from '../types/auth'
 
 const TOKEN_KEY = 'accessToken'
+const DEMO_MODE = import.meta.env.VITE_DEMO_MODE === 'true'
+const DEMO_SESSION_RESET_KEY = 'energokontur_demo_session_reset_v1'
+
+if (DEMO_MODE && !sessionStorage.getItem(DEMO_SESSION_RESET_KEY)) {
+  localStorage.removeItem(TOKEN_KEY)
+  sessionStorage.setItem(DEMO_SESSION_RESET_KEY, '1')
+}
 
 export const useAuthStore = defineStore('auth', () => {
   const accessToken = ref<string | null>(localStorage.getItem(TOKEN_KEY))

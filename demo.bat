@@ -54,6 +54,7 @@ timeout /t 4 /nobreak >nul
 
 echo Starting demo frontend...
 set "VITE_API_BASE_URL=http://localhost:4001"
+set "VITE_DEMO_MODE=true"
 start "EnergyKontur Demo Frontend" /D "%~dp0apps\frontend" cmd /k npm run dev -- --mode demo --port 5173
 
 timeout /t 3 /nobreak >nul
