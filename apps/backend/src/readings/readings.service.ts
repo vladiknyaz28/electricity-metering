@@ -16,6 +16,7 @@ import {
   resolvePhysicalValues,
   totalConsumptionFromZones,
 } from '../common/meter-zones';
+import { TrialLimitsService } from '../common/trial-limits.service';
 
 type CurrentUser = {
   id: string;
@@ -36,9 +37,11 @@ export class ReadingsService {
     private readonly prisma: PrismaService,
     private readonly metersService: MetersService,
     private readonly tariffsService: TariffsService,
+    private readonly trialLimits: TrialLimitsService,
   ) {}
 
   async create(dto: CreateReadingDto, currentUser: CurrentUser) {
+    await this.trialLimits.assertCanCreateReading();
     this.assertCanMutate(currentUser);
 
     const meter = await this.metersService.findOneScoped(

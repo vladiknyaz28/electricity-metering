@@ -14,6 +14,7 @@ import {
   resolvePhysicalValues,
   totalConsumptionFromZones,
 } from '../common/meter-zones';
+import { TrialLimitsService } from '../common/trial-limits.service';
 
 const meterInclude = {
   object: {
@@ -69,9 +70,13 @@ type TransformerFields = {
 export class MetersService {
   private readonly logger = new Logger(MetersService.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly trialLimits: TrialLimitsService,
+  ) {}
 
   async create(dto: CreateMeterDto, currentUser: CurrentUser) {
+    await this.trialLimits.assertCanCreateMeter();
     const object = await this.getObjectOrThrow(dto.objectId);
     this.assertObjectManagerAccess(currentUser, object.managerId);
 

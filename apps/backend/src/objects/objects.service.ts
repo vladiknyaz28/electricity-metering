@@ -8,6 +8,7 @@ import {
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { MetersService } from '../meters/meters.service';
+import { TrialLimitsService } from '../common/trial-limits.service';
 import { CreateObjectDto } from './dto/create-object.dto';
 import { UpdateObjectDto } from './dto/update-object.dto';
 
@@ -47,9 +48,11 @@ export class ObjectsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly metersService: MetersService,
+    private readonly trialLimits: TrialLimitsService,
   ) {}
 
   async create(dto: CreateObjectDto, currentUser: CurrentUser) {
+    await this.trialLimits.assertCanCreateObject();
     const managerId =
       currentUser.role === 'object_manager' ? currentUser.id : dto.managerId;
 
